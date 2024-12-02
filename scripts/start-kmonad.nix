@@ -4,6 +4,7 @@ pkgs.writeScriptBin "start-kmonad" ''
   export PATH=${pkgs.envsubst}/bin:${pkgs.kmonad}/bin:${pkgs.list-input-devices}/bin:${pkgs.gnused}/bin:${pkgs.gnugrep}bin:$PATH
   dev_selector=$1
   conf=$2
+  loglevel=$3
   echo device selector: $dev_selector
   echo configuration: $conf
 
@@ -19,5 +20,9 @@ pkgs.writeScriptBin "start-kmonad" ''
   #  echo $CFG
   # fi
   echo entering kmonad process...
-  kmonad <(echo "$CFG") "''${@:3}"
+  if [ "$dloglevel" != "" ]; then
+    kmonad --log-level $loglevel <(echo "$CFG") "''${@:3}"
+  else
+    kmonad <(echo "$CFG") "''${@:3}"
+  fi
 ''
