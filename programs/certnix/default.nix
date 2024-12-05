@@ -1,9 +1,13 @@
-{pkgs, lib, config, ...}@args:
+{certnix-config, pkgs}:
 let
-  cfg = config.programs.certnix;
+  lib = pkgs.lib;
+  cfg = certnix-config;
+  create-home = if cfg ? createHome then cfg.createHome else true;
 in  
 with lib; with types; # use the functions from lib, such as mkIf
 let
+
+
   hashrow-message = msg: ''
     echo 
     echo "########################################################"
@@ -14,7 +18,7 @@ let
   
   defaultEncryption = "aes256";
   
-  certnix = pkgs.stdenv.mkDerivation {
+/*  certnix = pkgs.stdenv.mkDerivation {
     name = "certnix";
     version = "custom";
     src = script;
@@ -25,7 +29,8 @@ let
     dontUnpack = true;
     # dontBuild = true;
     # dontStrip = true;
-  };
+    };
+*/
   deps = with pkgs; [
     openssl 
     coreutils 
@@ -33,6 +38,7 @@ let
     gnugrep 
     rsync
     gnused
+    tree
   ];
   path = concatStringsSep ":" (map mkPath deps);
   mkPath = pkg: concatStringsSep "/" [(toString pkg) "bin"];
@@ -46,7 +52,7 @@ let
     set -e
     
     export PATH=${path}
-    ${import <nixk44/scripts/file_ending.nix}
+    ${import <nixk44/scripts/file_ending.nix>}
     
     home="${cfg.home}"
     
@@ -83,7 +89,7 @@ let
     # DOIT=$ANSWER
     
     if [[ "$1" == "build" ]] ; then
-      ${optionalString (cfg.create-home) ''mkdir -p $home/private/''}
+      ${optionalString (create-home) ''mkdir -p $home/private/''}
       cd $home/private/
       
       ${mkLocal cfg}
@@ -180,38 +186,42 @@ let
     locality,
     organisation,
     organisational-unit ? null,
-    common-name,
-    pfx,
+    common-name ? null,
+    pfx ? false,
     encryption ? defaultEncryption,
     ...
   }@args: let
-  
+    authy = {
+      services = {};
+      clients = {};
+      authorities = {};
+    } // args;
   in ''
     if [[ ! -d authorities ]] ; then mkdir authorities; fi
     cd authorities; pwd
-      ${concatStringsSep "\n" (map (mkLocalAuthority args) (attrNames args.authorities))}
+      ${concatStringsSep "\n" (map (mkLocalAuthority authy) (attrNames authy.authorities))}
     cd ..; pwd
     
     
     if [[ ! -d services ]] ; then mkdir services; fi
     cd services; pwd
       ${hashrow-message "managing local services"}
-      ${concatStringsSep "\n" (map (mkLocalService args) (attrNames args.services))}
+      ${concatStringsSep "\n" (map (mkLocalService authy) (attrNames authy.services))}
     cd ..; pwd
     if [[ ! -d clients ]] ; then mkdir clients; fi
     cd clients; pwd
       ${hashrow-message "managing local clients"}
-      ${concatStringsSep "\n" (map (mkLocalClient args) (attrNames args.clients))}
+      ${concatStringsSep "\n" (map (mkLocalClient authy) (attrNames authy.clients))}
     cd ..; pwd;
   '';
   
   
   mkLocalAuthority = {
     ...
-  }@args: name: let 
-    authority = args.authorities.${name};
+  }@authy: name: let 
+    authority = authy.authorities.${name};
   in mkAuthority (
-    (strip args) // {
+    (strip authy) // {
       name = name; 
       authority = authority;
     } // (strip cfg) // (strip authority)
@@ -222,9 +232,9 @@ let
     local ? true,
     self-sign ? false,
     ...
-  }@args: name: let
-    service = args.services.${name};
-  in mkService ((strip args) // {
+  }@authy: name: let
+    service = authy.services.${name};
+  in mkService ((strip authy) // {
     name = name;
     service = service;
     is-sub = is-sub;
@@ -237,9 +247,9 @@ let
     local ? true,
     self-sign ? false,
     ...
-  }@args: name: let
-    client = args.clients.${name};
-  in mkClient ((strip args) // {
+  }@authy: name: let
+    client = authy.clients.${name};
+  in mkClient ((strip authy) // {
     name = name;
     client = client;
     is-sub = is-sub;
@@ -254,7 +264,7 @@ let
   in ''${concatStringsSep ", " (concatLists [(map mkDns dns) (map mkIp ips)])}'';
   
   
-  mkService = args: mkServiceOrClient "service" mkClientExtensionsHeader ({extended-key-usage = "critical, serverAuth"; } // (strip args));
+  mkService = authy: mkServiceOrClient "service" mkClientExtensionsHeader ({extended-key-usage = "critical, serverAuth"; } // (strip authy));
   
   mkServiceOrClient = type: ext-header-fn: {
     is-sub ? false,
@@ -406,7 +416,7 @@ let
     # echo grepped
     if [[ $revoked == "" ]]; then
       echo "revoking certificate '${name}' (${serial})"
-      openssl ca -config ./conf/self.openssl.conf -revoke ${optionalString (rev.reason != null) "-crl_reason ${rev.reason}"} ./certs/${serial}.pem || handleError
+      openssl ca -config ./conf/self.openssl.conf -revoke ${optionalString (rev ? reason) "-crl_reason ${rev.reason}"} ./certs/${serial}.pem || handleError
     else
       echo "already revoked: '${name}' (${serial})"
     fi
@@ -433,258 +443,256 @@ let
     crl-uris ? [],
     ...
   }@args: let
-  
-    mkSubAuthority = name: let
-      sub = authority.authorities.${name};
-    in mkAuthority (args // {
-      is-sub = true;
-      authority = sub;
-      revoke = [];
-      name = name;
-      self-sign = false;
-      crl-uris = [];
-      path-len = if path-len == 0 then 0 else path-len - 1;
-    } // (strip sub));
-  
-    mkSubService = name: let
-      service = authority.services.${name};
-    in mkService ((strip args) // (strip service) // {
-      is-sub = true;
-      name = name;
-      service = service;
-    });
-  
-    mkSubClient = name: let
-      client = authority.clients.${name};
-    in mkClient ((strip args) // (strip client) // {
-      is-sub = true;
-      name = name;
-      client = client;
-    });
-  
-  
-    self-conf = pkgs.writeText "${name}.self.openssl.conf" ''
-      ${common-ca-conf}
-      
-        default_days      = ${toString valid-for}
 
-      ${mkReqConfHeader "my_extensions" args}
-      
-      [ my_extensions ]
-        
-        subjectKeyIdentifier = hash
-        authorityKeyIdentifier = keyid:always,issuer:always
-        basicConstraints = critical, CA:true ${optionalString (path-len >= 0) '', pathlen:${toString path-len}''}
-        keyUsage = critical, digitalSignature, cRLSign, keyCertSign
-    '';
-    
-    crl-conf = pkgs.writeText "${name}.crl.openssl.conf" ''
-      ${common-ca-conf}
+      authy = {
+          authorities = {};
+          services = {};
+          clients = {};
+          revoked = {};
+        } // authority;
 
-        crlnumber         = $dir/data/crl-number.txt
-        crl               = $dir/${name}.crl.pem
+      mkSubAuthority = name: let
+        sub = authy.authorities.${name};
+      in mkAuthority (args // {
+        is-sub = true;
+        authority = sub;
+        revoke = [];
+        name = name;
+        self-sign = false;
+        crl-uris = [];
+        path-len = if path-len == 0 then 0 else path-len - 1;
+      } // (strip sub));
+    
+      mkSubService = name: let
+        service = authy.services.${name};
+      in mkService ((strip args) // (strip service) // {
+        is-sub = true;
+        name = name;
+        service = service;
+      });
+    
+      mkSubClient = name: 
+        if isString name then (
+          let
+            client = authy.clients.${name};
+          in
+            if (lib.isAttrs client) then
+          mkClient ((strip args) // (strip client) // {
+            is-sub = true;
+            name = name;
+            client = client;
+          }) else throw "not a set: ${toString client} string?:${toString (lib.isString client)} name:${toString name}"
+        ) else throw "not a string: ${toString name}";
         
-        default_crl_days  = 30
+    
+      self-conf = pkgs.writeText "${name}.self.openssl.conf" ''
+        ${common-ca-conf}
+        
+          default_days      = ${toString valid-for}
 
-        crl_extensions = my_extensions
-      
-      [ my_extensions ]
+        ${mkReqConfHeader "my_extensions" args}
         
-        authorityKeyIdentifier = keyid:always,issuer:always
-    '';
-    
-    common-ca-conf = ''
-      [ ca ]
-        default_ca      = my_ca
+        [ my_extensions ]
+          
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid:always,issuer:always
+          basicConstraints = critical, CA:true ${optionalString (path-len >= 0) '', pathlen:${toString path-len}''}
+          keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+      '';
       
-      [ my_ca ]
-      
-        ${paths-conf}
+      crl-conf = pkgs.writeText "${name}.crl.openssl.conf" ''
+        ${common-ca-conf}
 
-        default_md        = ${hash}
+          crlnumber         = $dir/data/crl-number.txt
+          crl               = $dir/${name}.crl.pem
+          
+          default_crl_days  = 30
 
-        name_opt          = ca_default
-        cert_opt          = ca_default
+          crl_extensions = my_extensions
         
-        preserve          = no
+        [ my_extensions ]
+          
+          authorityKeyIdentifier = keyid:always,issuer:always
+      '';
+      
+      common-ca-conf = ''
+        [ ca ]
+          default_ca      = my_ca
         
-    '';
-    
-    paths-conf = ''
-      dir               = .
-      certs             = $dir/certs
-      new_certs_dir     = $dir/certs
-      database          = $dir/data/index.db
-      serial            = $dir/data/serial.txt
-      RANDFILE          = $dir/private/random.txt
-      private_key       = $dir/private/${name}.key.pem
-      certificate       = $dir/${name}.cert.pem
-    '';
-    
-    clients-conf = pkgs.writeText "${name}.clients.openssl.conf" ''
-      ${common-ca-conf}
-      
-        default_days = 365
-      
-        policy = my_policy
-      
-        x509_extensions = my_extensions
-      
-      [ my_policy ]
-      
-        countryName             = match
-        stateOrProvinceName     = match
-        localityName            = match
-        organizationName        = match
-        organizationalUnitName  = optional
-        commonName              = supplied
-        emailAddress            = optional
-      
-      ${mkServiceExtensionsHeader {name = "my_extensions";}}
-    '';
-    
-    services-conf = pkgs.writeText "${name}.services.openssl.conf" ''
-      ${common-ca-conf}
-      
-        default_days = 365
-      
-        policy = my_policy
-      
-        x509_extensions = my_extensions
-      
-      [ my_policy ]
-      
-        countryName             = match
-        stateOrProvinceName     = match
-        localityName            = match
-        organizationName        = match
-        organizationalUnitName  = optional
-        commonName              = supplied
-        emailAddress            = optional
-      
-      ${mkServiceExtensionsHeader {name = "my_extensions";}}
-      
-    '';
-    
-    index-db-attr = pkgs.writeText "${name}.index.db.attr" ''
-        # this allows us to regenerate certificates for servers which have expired
-        unique_subject    = no
-    '';
-    authorities-conf = pkgs.writeText "${name}.authorities.openssl.conf" ''
-      ${common-ca-conf}
-      
-        default_days = 365
-      
-        policy = my_policy
-      
-        x509_extensions = my_extensions
-      
-      [ my_policy ]
-      
-        countryName             = match
-        stateOrProvinceName     = match
-        localityName            = match
-        organizationName        = match
-        organizationalUnitName  = optional
-        commonName              = supplied
-        emailAddress            = optional
-      
-      [ my_extensions ]
+        [ my_ca ]
         
-        subjectKeyIdentifier = hash
-        authorityKeyIdentifier = keyid:always, issuer:always
-        basicConstraints = critical, CA:true ${optionalString (path-len >= 0) '', pathlen:${toString path-len}''}
-        keyUsage = critical, digitalSignature, cRLSign, keyCertSign
-        ${optionalString (crl-uris != []) ''crlDistributionPoints = URI:${concatStringsSep ", URI:" crl-uris}''}
+          ${paths-conf}
 
-    '';
-  in ''
-  
-    ${hashrow-message "building authority '${name}'"}
-    if [[ ! -d ${name} ]] ; then mkdir ${name}; fi
-    cd ${name}; pwd
-      if [[ ! -d data ]] ; then mkdir data; fi
-      cd data; pwd
-        if [[ ! -f serial.txt ]] ; then echo 1000 > serial.txt; fi
-        if [[ ! -f crl-number.txt ]] ; then echo 1000 > crl-number.txt; fi
-        if [[ ! -f index.db ]] ; then touch index.db; fi
-        cp ${index-db-attr} ./index.db.attr
-      cd ..; pwd
-      if [[ ! -d crl ]] ; then mkdir crl; fi
-      if [[ ! -d certs ]] ; then mkdir certs; fi
-      if [[ ! -d private ]] ; then mkdir private; fi
-      cd private; pwd
-        ${mkPrivateKey name encryption bits}
-      cd ..; pwd
-      if [[ ! -d conf ]] ; then mkdir conf; fi
-      cd conf
-        cp ${self-conf} ./self.openssl.conf
-        cp ${crl-conf} ./crl.openssl.conf
-        cp ${authorities-conf} ./authorities.openssl.conf
-        cp ${services-conf} ./services.openssl.conf
-        cp ${clients-conf} ./clients.openssl.conf
-       
-      cd ..; pwd
-      if [[ ! -f ${name}.cert.pem ]] ; then
-        ${if (self-sign == true) then ''
-          echo self-signing authority certificate
-          openssl req -utf8 -key ./private/${name}.key.pem -config conf/self.openssl.conf -new -x509 -out ./${name}.cert.pem || handleError
-          ${optionalString pfx (mkPfx name true)}
-        '' else ''
-          echo creating CSR for authority
-          openssl req -utf8  -config ./conf/self.openssl.conf -new -key ./private/${name}.key.pem -out ./${name}.csr.pem || handleError
-          ${optionalString (is-sub) ''
-            ${mkSuperSign "authorities" null args}
+          default_md        = ${hash}
+
+          name_opt          = ca_default
+          cert_opt          = ca_default
+          
+          preserve          = no
+          
+      '';
+      
+      paths-conf = ''
+        dir               = .
+        certs             = $dir/certs
+        new_certs_dir     = $dir/certs
+        database          = $dir/data/index.db
+        serial            = $dir/data/serial.txt
+        RANDFILE          = $dir/private/random.txt
+        private_key       = $dir/private/${name}.key.pem
+        certificate       = $dir/${name}.cert.pem
+      '';
+      
+      clients-conf = pkgs.writeText "${name}.clients.openssl.conf" ''
+        ${common-ca-conf}
+        
+          default_days = 365
+        
+          policy = my_policy
+        
+          x509_extensions = my_extensions
+        
+        [ my_policy ]
+        
+          countryName             = match
+          stateOrProvinceName     = match
+          localityName            = match
+          organizationName        = match
+          organizationalUnitName  = optional
+          commonName              = supplied
+          emailAddress            = optional
+        
+        ${mkServiceExtensionsHeader {name = "my_extensions";}}
+      '';
+      
+      services-conf = pkgs.writeText "${name}.services.openssl.conf" ''
+        ${common-ca-conf}
+        
+          default_days = 365
+        
+          policy = my_policy
+        
+          x509_extensions = my_extensions
+        
+        [ my_policy ]
+        
+          countryName             = match
+          stateOrProvinceName     = match
+          localityName            = match
+          organizationName        = match
+          organizationalUnitName  = optional
+          commonName              = supplied
+          emailAddress            = optional
+        
+        ${mkServiceExtensionsHeader {name = "my_extensions";}}
+        
+      '';
+      
+      index-db-attr = pkgs.writeText "${name}.index.db.attr" ''
+          # this allows us to regenerate certificates for servers which have expired
+          unique_subject    = no
+      '';
+      authorities-conf = pkgs.writeText "${name}.authorities.openssl.conf" ''
+        ${common-ca-conf}
+        
+          default_days = 365
+        
+          policy = my_policy
+        
+          x509_extensions = my_extensions
+        
+        [ my_policy ]
+        
+          countryName             = match
+          stateOrProvinceName     = match
+          localityName            = match
+          organizationName        = match
+          organizationalUnitName  = optional
+          commonName              = supplied
+          emailAddress            = optional
+        
+        [ my_extensions ]
+          
+          subjectKeyIdentifier = hash
+          authorityKeyIdentifier = keyid:always, issuer:always
+          basicConstraints = critical, CA:true ${optionalString (path-len >= 0) '', pathlen:${toString path-len}''}
+          keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+          ${optionalString (crl-uris != []) ''crlDistributionPoints = URI:${concatStringsSep ", URI:" crl-uris}''}
+
+      '';
+    in ''
+    
+      ${hashrow-message "building authority '${name}'"}
+      if [[ ! -d ${name} ]] ; then mkdir ${name}; fi
+      cd ${name}; pwd
+        if [[ ! -d data ]] ; then mkdir data; fi
+        cd data; pwd
+          if [[ ! -f serial.txt ]] ; then echo 1000 > serial.txt; fi
+          if [[ ! -f crl-number.txt ]] ; then echo 1000 > crl-number.txt; fi
+          if [[ ! -f index.db ]] ; then touch index.db; fi
+          cp ${index-db-attr} ./index.db.attr
+        cd ..; pwd
+        if [[ ! -d crl ]] ; then mkdir crl; fi
+        if [[ ! -d certs ]] ; then mkdir certs; fi
+        if [[ ! -d private ]] ; then mkdir private; fi
+        cd private; pwd
+          ${mkPrivateKey name encryption bits}
+        cd ..; pwd
+        if [[ ! -d conf ]] ; then mkdir conf; fi
+        cd conf
+          cp ${self-conf} ./self.openssl.conf
+          cp ${crl-conf} ./crl.openssl.conf
+          cp ${authorities-conf} ./authorities.openssl.conf
+          cp ${services-conf} ./services.openssl.conf
+          cp ${clients-conf} ./clients.openssl.conf
+         
+        cd ..; pwd
+        if [[ ! -f ${name}.cert.pem ]] ; then
+          ${if (self-sign == true) then ''
+            echo self-signing authority certificate
+            openssl req -utf8 -key ./private/${name}.key.pem -config conf/self.openssl.conf -new -x509 -out ./${name}.cert.pem || handleError
+            ${optionalString pfx (mkPfx name true)}
+          '' else ''
+            echo creating CSR for authority
+            openssl req -utf8  -config ./conf/self.openssl.conf -new -key ./private/${name}.key.pem -out ./${name}.csr.pem || handleError
+            ${optionalString (is-sub) ''
+              ${mkSuperSign "authorities" null args}
+            ''}
           ''}
-        ''}
-      fi 
-      ${optionalString pfx (mkPfx name true)}
-      
-      ${hashrow-message "revoking certificates"}
-      
-      
-      ${concatStringsSep "\n" (map (mkRevoke authority) (attrNames authority.revoked))}
-      
-      ${hashrow-message "managing CRL of '${name}'"}
-      
-      askYesNo "Would you like to (re-) generate the CRL of '${name}'?" false
-      if [ "$ANSWER" = true ]; then
-        openssl ca -config ./conf/crl.openssl.conf -gencrl -out ./${name}.crl.pem || handleError
-      fi
-      
-      if [[ ! -d authorities ]] ; then mkdir authorities; fi
-      cd authorities; pwd
-        ${hashrow-message "managing sub-authorities of '${name}'"}
-        ${concatStringsSep "\n" (map (mkSubAuthority) (attrNames authority.authorities))}
+        fi 
+        ${optionalString pfx (mkPfx name true)}
+        
+        ${hashrow-message "revoking certificates"}
+        
+        
+        ${concatStringsSep "\n" (map (mkRevoke authy) (attrNames authy.revoked))}
+        
+        ${hashrow-message "managing CRL of '${name}'"}
+        
+        askYesNo "Would you like to (re-) generate the CRL of '${name}'?" false
+        if [ "$ANSWER" = true ]; then
+          openssl ca -config ./conf/crl.openssl.conf -gencrl -out ./${name}.crl.pem || handleError
+        fi
+        
+        if [[ ! -d authorities ]] ; then mkdir authorities; fi
+        cd authorities; pwd
+          ${hashrow-message "managing sub-authorities of '${name}'"}
+          ${concatStringsSep "\n" (map (mkSubAuthority) (attrNames authy.authorities))}
+        cd ..; pwd
+        if [[ ! -d services ]] ; then mkdir services; fi
+        cd services; pwd
+          ${hashrow-message "managing services of '${name}'"}
+          ${concatStringsSep "\n" (map (mkSubService) (attrNames authy.services))}
+        cd ..; pwd
+        if [[ ! -d clients ]] ; then mkdir clients; fi
+        cd clients; pwd
+          ${hashrow-message "managing clients of '${name}'"}
+          ${concatStringsSep "\n" (map (mkSubClient)  (attrNames authy.clients) )}
+        cd ..; pwd
+        ${hashrow-message "finished building authority '${name}'"}
       cd ..; pwd
-      if [[ ! -d services ]] ; then mkdir services; fi
-      cd services; pwd
-        ${hashrow-message "managing services of '${name}'"}
-        ${concatStringsSep "\n" (map (mkSubService) (attrNames authority.services))}
-      cd ..; pwd
-      if [[ ! -d clients ]] ; then mkdir clients; fi
-      cd clients; pwd
-        ${hashrow-message "managing clients of '${name}'"}
-        ${concatStringsSep "\n" (map (mkSubClient) (attrNames authority.clients))}
-      cd ..; pwd
-      ${hashrow-message "finished building authority '${name}'"}
-    cd ..; pwd
-  '';
+    '';
   
   
   
-  
-in
-{
-
-  options = {
-    programs = {
-      certnix = lib.mkOption {
-        type = submodule (import ./certnix.nix);
-      };
-    };
-  };
-  config = {
-    programs.certnix.package = certnix;
-  };
-}
+in script
