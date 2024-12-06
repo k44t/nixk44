@@ -99,6 +99,7 @@ in
     pfx = mkOption {
       type = bool;
       default = false;
+      description = ''should a pfx export be generated'';
     };
     
     subject-alt-name = mkOption {
