@@ -3,12 +3,13 @@ import shutil
 import re
 import time
 import subprocess
+import json
 from natsort import natsorted
 
 import argparse
 
-K44_VMM_MOUNT_ROOT = os.environ(['K44_VMM_MOUNT_ROOT'])
-mount_parent = os.environ(['K44_VMM_ZION_PATH'])
+mount_parent = os.environ(['K44_VMM_MOUNT_ROOT'])
+K44_VMM_ZION_PATH = os.environ(['K44_VMM_ZION_PATH'])
 
 # Create the parser
 parser = argparse.ArgumentParser(description="virtual machine worker")
@@ -16,7 +17,7 @@ parser = argparse.ArgumentParser(description="virtual machine worker")
 subparser = parser.add_subparsers(required=True)
 
 shared_parser = argparse.ArgumentParser(add_help=False)
-shared_parser.add_argument("vmname", type=str, help="the name of the vm")
+shared_parser.add_argument("vmname", type=str, required=True, help="the name of the vm")
 
 external_parser = argparse.ArgumentParser(add_help=False)
 external_parser.add_argument("--path", type=str, help="path to where the nixos installation is mounted")
@@ -47,6 +48,8 @@ create_parser.add_argument("--overwrite_main_partition_table")
 create_parser.add_argument("--overwrite_data_partition_table")
 
 mount_parser.add_argument("--division", type=str, help="the suffix of a mirrored pool we are mounting (for a physical host)")
+
+install_parser.add_argument("--vmorg", required=True, type=str, help="the organisation under which the vm shall be installed, e.g. feu")
 
 def is_partitioned(blockdev):
   # -s means script
@@ -103,7 +106,26 @@ def chmods(path, elements, rights):
       os.chmod(element_to_be_changed, right)
       print(f"modifie rights of '{element_to_be_changed}' to '{right}'")
 
-def is_bind_mounted_as()
+def is_bind_mounted_as(pointed, pointing):
+  pointers = exec(f"findmnt --noheadings --output source {pointing}")
+  regexp_pattern = r'\[(.*)\]'
+  regexp_searcher = re.compile(regexp_pattern)
+  if type(pointers) != list:
+    pointers = [pointers]
+  for pointer in pointers:
+    pointer = pointer.replace("\n", "")
+    pointer_stripped = re.sub(regexp_pattern, '', pointer)
+    mount_json_string = exec(f"findmnt --noheadings --output source,target {pointer_stripped} --json")
+    mounts_json = json.loads(mount_json_string)
+    for mount in mounts_json["filesystems"]:
+      if "[" in mount["source"]:
+        continue
+      target_root = mount["target"]
+      target_path = regexp_searcher.search(pointer).groups()[0]
+      target = os.path.join(target_root, target_path)
+      if target == pointed:
+        return True
+  return False
 
 def bind_mount(pointing, pointed):
   if not is_bind_mounted_as(pointed, pointing):
@@ -317,11 +339,12 @@ def resize(args):
 def install(args):
   vmname = args.vmname
   root = args.path
+  vmorg = args.vmorg
   if root == None:
     root = f"{mount_parent}/{vmname}"
   
   # K44_VMM_ZION_PATH
-  exec(f"cd /#/zion; NIX_PATH=/#/zion/k44/feu:/#/zion/k44:/#/zion:/#/zion/channels:nixos-config=/#/zion/k44/feu/hosts/eva/eva.nix NIXPKGS_ALLOW_INSECURE=1 NIX_ALLOW_UNFREE=1 nixos-install --flake /#/zion/k44/feu/hosts/{vmname}#{vmname} --root {root} --impure --no-root-passwd")
+  exec(f"nixos-install --flake {K44_VMM_ZION_PATH}/{vmorg}/hosts/{vmname}#{vmname} --root {root} --impure --no-root-passwd")
 
 def enter(args):
   if args.path != None:
