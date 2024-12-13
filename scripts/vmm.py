@@ -11,21 +11,23 @@ import argparse
 from utils_python.utils_python_package.src.Apoeschllogging import *
 
 debug = True
+if debug:
+  Deb_set_printCallstack(True)
 
 try:
   mount_parent = os.environ(['K44_VMM_MOUNT_ROOT'])
 except Exception as e:
-  Log_warn(f"ERROR: {e} - we will continue with `/var/vmm`")
+  Log_warn(f"{e} - we will continue with `/var/vmm`")
   mount_parent = "/var/vmm"
 try:
   K44_VMM_ZION_PATH = os.environ(['K44_VMM_ZION_PATH'])
 except Exception as e:
-  Log_warn(f"ERROR: {e} - we will continue with `/#/zion/k44`")
+  Log_warn(f"{e} - we will continue with `/#/zion/k44`")
   K44_VMM_ZION_PATH = "/#/zion/k44"
 try:
   K44_VMM_ZVOL_PARENT_PATH = os.environ(['K44_VMM_ZVOL_PARENT_PATH'])
 except Exception as e:
-  Log_warn(f"ERROR: {e} - we will continue with `None`")
+  Log_warn(f"{e} - we will continue with `None`")
   K44_VMM_ZVOL_PARENT_PATH = None
 
 # Create the parser

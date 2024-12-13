@@ -15,6 +15,9 @@ import queue
 import time
 import os, sys
 from datetime import datetime
+import inspect
+import re
+import traceback
 from inspect import currentframe, getframeinfo
 from src.LogLevel import LogLevels
 from utils_python_package.src.CLIColors import clicolors
@@ -22,6 +25,7 @@ from utils_python.utils_python_package.src.LogLevel import LogLevels
 
 Deb_callbackfunction = None
 Deb_usePrintFunction = True
+Deb_printCallstack = False
 Deb_activateCallback = False
 Deb_activateMessages_flag = True
 Deb_logfolder = "./logs/apoeschllogs/"
@@ -135,10 +139,10 @@ def Log(message, level = LogLevels.UNKNOWN, show_additional_info = False, wrappe
     if Deb_onlyAllowLevelFlag and not levelAllowed:
         return
     if wrapper:
-        frame = sys._getframe().f_back.f_back
+        frame = sys._getframe().f_back
         frameInfo = getframeinfo(frame)
         fileName = frameInfo.filename.split('/')[-1]
-        while "\\apoeschlutils.py" in fileName:
+        while "Apoeschllogging.py" in fileName:
             frame = frame.f_back
             frameInfo = getframeinfo(frame)
             fileName = frameInfo.filename.split('/')[-1]
@@ -146,7 +150,28 @@ def Log(message, level = LogLevels.UNKNOWN, show_additional_info = False, wrappe
         frameInfo = getframeinfo(sys._getframe().f_back)
     fileName = frameInfo.filename.split('/')[-1]
     lineNumber = frameInfo.lineno
+
+
+    if Deb_printCallstack:
+        callStack = ""
+        raw_tb = traceback.extract_stack()
+        entries = traceback.format_list(raw_tb)
+        for line in entries:
+            if ".vscode-server" in line or "/nix/store/" in line or "Apoeschllogging.py" in line:
+                continue
+            else:
+                regexp_pattern = r'in (.*?)\n'
+                regexp = re.compile(regexp_pattern)
+                match = re.search(regexp_pattern, line).group(1)
+                if match == "<module>":
+                    callstack = match
+                else:
+                    callstack = callstack + "->" + match
+        callstack = callstack + ": "
+
     debugMessage = clicolors.BOLD + clicolors.OKGREEN + Get_timestamp() + " " + clicolors.OKBLUE + fileName + ":" + str(lineNumber) + " : "
+    if Deb_printCallstack:
+        debugMessage = debugMessage + callstack
     if LogLevels.UNKNOWN != level:
         if LogLevels.ERROR == level:
             levelMessage = clicolors.FAIL + "\n>>>>>>> ERROR >>>>>>\n"
@@ -240,6 +265,11 @@ def Deb_get_usePrintFunction():
     Log("Deb_get_usePrintFunction " + str(Deb_usePrintFunction), level=LogLevels.DEBCONFIG)
     return Deb_usePrintFunction
 
+def Deb_get_printCallstack():
+    global Deb_printCallstack
+    Log("Deb_get_printCallstack " + str(Deb_printCallstack), level=LogLevels.DEBCONFIG)
+    return Deb_printCallstack
+
 def Deb_remove_only_allow_level(only_allow_level):
     Log("Deb_remove_only_allow_level " + str(only_allow_level), level=LogLevels.DEBCONFIG)
     global Deb_onlyAllowLevels
@@ -294,3 +324,8 @@ def Deb_set_usePrintFunction(activate_usePrintFunction):
     global Deb_usePrintFunction
     Deb_usePrintFunction = activate_usePrintFunction
     Log("Deb_set_writetologfile " + str(activate_usePrintFunction), level=LogLevels.DEBCONFIG)
+    
+def Deb_set_printCallstack(activate_printCallstack):
+    global Deb_printCallstack
+    Deb_printCallstack = activate_printCallstack
+    Log("Deb_set_printCallstack " + str(activate_printCallstack), level=LogLevels.DEBCONFIG)
