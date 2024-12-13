@@ -130,7 +130,12 @@ def chmods(path, elements, rights):
   for element in elements:
     for right in rights:
       element_to_be_changed = f"{path}/{element}"
-      os.chmod(element_to_be_changed, right)
+      try:
+        os.chmod(element_to_be_changed, right)
+      except Exception as e:
+        error_message = f"Could not change file mods, are you root? Error: '{e}'"
+        Log_error(error_message)
+        raise BaseException(error_message)
       Log_info(f"modify rights of '{element_to_be_changed}' to '{right}'")
 
 def is_bind_mounted_as(pointed, pointing):
