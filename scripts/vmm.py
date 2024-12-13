@@ -58,9 +58,6 @@ enter_parser = subparser.add_parser('enter', parents=[external_parser], help='en
 create_parser.add_argument("--data_disk_only", help="wether to ONLY create a data disk.")
 create_parser.add_argument("--no_data_disk", help="wether to NOT create a data disk.")
 create_parser.add_argument("--data_as_dataset", help="whether data is just a dataset and not a whole (possibly virtual) disk")
-create_parser.add_argument("--force-partition-main-disk")
-create_parser.add_argument("--force-partition-data-disk")
-create_parser.add_argument("--force-format-boot-partition")
 
 mount_parser.add_argument("--division", type=str, help="the suffix of a mirrored pool we are mounting (for a physical host)")
 
@@ -166,7 +163,7 @@ def mount_additional_binds(list):
       throw(f"--additional-binds malformatted.")
 
 def warn(msg):
-  print(msg)
+  print("WARN: " + msg)
 
 def exec_or(command, error_message):
   if not exec_for_bool(command):
@@ -207,14 +204,11 @@ def refresh_partitions():
   exec("partprobe")
 
 
-def check_is_partitioned(blockdev, which, force):
+def check_is_partitioned(blockdev, which):
   if is_partitioned(blockdev):
-    if force:
-      return True
-    else:
-      print(f"WARNING: {blockdev} is already partitioned. You can set the flag `--force-partition-{which}-disk` to repartition it.")
+    warn(f"{blockdev} is already partitioned. Please destroy the partition table manually if you want me to recreate it. Don't forget to wipefs or else you'll confuse me.")
 
-def partition_main_disk(blockdev):
+def possibly_partition_main_disk(blockdev):
   if check_is_partitioned(blockdev, "main", args.force_partition_main_disk):
 
     print(f"partitioning main disk: {blockdev}")
@@ -225,8 +219,8 @@ def partition_main_disk(blockdev):
     exec_or(f"parted {blockdev} -- mkpart {vmname}-main 1GiB 100%", error_message)
     refresh_partitions()
 
-def partition_data_disk(blockdev):
-  if check_is_partitioned(blockdev, "data", args.force_partition_data_disk):
+def possibly_partition_data_disk(blockdev):
+  if check_is_partitioned(blockdev, "data"):
 
     print(f"partitioning data disk: {blockdev}")
     error_message = f"could not format {blockdev}"
@@ -249,31 +243,31 @@ def create(args):
     vmroot = f"{mount_parent}/{vmname}"
 
     if not args.data_disk_only:
-      # create main disk
 
-        
+        # create main disk
+      print("creating main disk (if neccessary)")
+
+
     
       zvol_path = f"{args.zvol_parent_path}/vm-{vmname}-vda"
     
       if not zfs_exists(zvol_path):
         create_blockdev("main", "10GiB", args.main_disk_size, zvol_path)
       blockdev = f"/dev/zvol/{zvol_path}"
-    
-      if args.force_partition_main_disk:
 
-      if is_zpool_imported(vmname):
-        if args.force_partition_main_disk:
-          print(f"zpool `export_zpool(vmname)
-    
+      possibly_partition_main_disk(blockdev)
+
       if not is_zpool_imported(vmname):
         print(f"zpool `{vmname}` is not yet imported.")
         if is_zpool_importable(vmname):
           print(f"zpool `{vmname}` is importable. try to import zpool `{vmname}`...")
           import_zpool(vmname, f"")
-          print(f"zpool `{vmname}` imported.")
+          print(f"zpool `{vmname}` imported. we assume that everything has been partitioned properly")
         else:
-          print(f"zpool `{vmname}` imported.")
-          print(f"creating zpool: {vmname}")
+          print(f"creating main zpool: {vmname}")
+          main_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-main"
+          if not os.path.isFile(main_partition_blockdev):
+            throw(f"blockdev {main_partition_blockdev} should exist at this point. this is likely a bug.")
           exec_or(f"zpool create {vmname} -R {vmroot} /dev/disk/by-partlabel/{vmname}-main -o autotrim=on -O acltype=posix -O atime=off -O canmount=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=none", f"could not create zpool: {vmname}")
       else:
         print(f"zpool `{vmname}` is already imported.")
@@ -283,8 +277,12 @@ def create(args):
         exec_or(f"zfs create {vmname}/fsroot -o mountpoint=legacy -o normalization=formD", f"could not create zfs dataset: {vmname}/fsroot")
       else:
         print(f"zfs {vmname}/fsroot already exists")
+
+
+
       mkdirs(vmroot, ".")
-    
+
+
       if is_zfs_manual_mount(f"{vmname}/fsroot"):
         print(f"mount zfs '{vmname}/fsroot' manually...")
         exec_or(f"mount -t zfs {vmname}/fsroot /mnt/{vmname}", f"could not mount zfs dataset: {vmname}/fsroot")
@@ -292,16 +290,21 @@ def create(args):
       mkdirs(f"{vmroot}", ["boot", "etc", "nix", "data", "root", "home"])
       chmods(f"{vmroot}", ["etc", "nix", "data", "home"], [stat.S_IREAD, stat.S_IEXEC])
     
+
+
+
+      print("checking boot partition")
     
       boot_partition = f"{partition_prefix}-boot"
-      if not is_formatted(boot_partition) or args.reformat_boot_partition:
+      if not is_formatted(boot_partition):
         print(f"formatting '{boot_partition}'")
         exec_or(f"mkfs.fat -F 32 -n \"{vmname[0:6]}-boot\" {boot_partition}", f"could not format: {boot_partition}")
       else:
-        print(f"WARNING: partition `{boot_partition}` is already formatted. You can set the flag `--reformat-boot-partition` to reformat it.")
+        warn(f"partition `{boot_partition}` is already formatted. You can set the flag `--reformat-boot-partition` to reformat it.")
       
       
-      if not is_mounted_as(boot_partition, f"{vmroot}/boot") and not exec_for_bool(f"mount /dev/disk/by-partlabel/{vmname}-boot boot"):
+      if not is_mounted_as(boot_partition, f"{vmroot}/boot"):
+        print("mounting boot partition")
         exec_or(f"mount {boot_partition} {vmroot}/boot", f"failed to mount boot_partition: `{blockdev}`")
         print(f"mounted `{boot_partition} {vmroot}/boot`")
     
@@ -309,6 +312,7 @@ def create(args):
     create_data_disk = not args.no_data_disk
     
     if args.data_as_dataset:
+      print("data is dataset, checking data dataset")
       # create data as a dataset
       create_data_disk = False
       if not zfs_exists(f"{vmname}/data") and not exec_for_bool(f"zfs create {vmname}/data -o mountpoint=/data -o com.sun:auto-snapshot=true"):
@@ -355,8 +359,8 @@ def create(args):
             print("partitioning is required.")
             require_partition = True
           if require_partition:        
-           
-            time.sleep(1)
+            possibly_partition_data_disk(blockdev)
+
             exec_or(f"zpool create {vmname}-data -R /mnt/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true"
               , error_message)
             print(f"created zpool for '{vmname}.")
@@ -364,6 +368,9 @@ def create(args):
             chmods(f"{vmroot}", [".", "home"], [stat.S_IREAD, stat.S_IEXEC])
           else:
             throw(f"failed to partition: {blockdev}")
+
+
+
     mkdirs(f"{vmroot}/data", ["root", "home"])
     chmods(f"{vmroot}/data", [".", "home"], [stat.S_IREAD, stat.S_IEXEC])
     bind_mount(f"{vmroot}/data/root", f"{vmroot}/root")

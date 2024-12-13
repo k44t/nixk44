@@ -9,10 +9,9 @@
 # @author Alexander Poeschl <apoeschlfreelancing@kwanta.net>
 # @brief LogLevel, used in apoeschlutils logging capability.
 # ******************************************************************************
-import src.eLogLevels as eLogLevels
 from src.BetterEnumInstance import BetterEnumInstance
+from newLogLevel import newLogLevel
 
-eLogLevels = eLogLevels.eLogLevels
 class LogLevel(BetterEnumInstance):
     @classmethod
     def __new__(self, cls, *args):
@@ -20,6 +19,6 @@ class LogLevel(BetterEnumInstance):
         if len(args) > 0:
             newState = args[0]
         else:
-            newState = eLogLevels.UNKNOWN
+            newState = 5 # 5 is error
         retVal = BetterEnumInstance.__new__(self, newState, LogLevel.__name__, eLogLevels)
         return retVal
