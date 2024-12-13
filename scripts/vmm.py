@@ -58,9 +58,9 @@ enter_parser = subparser.add_parser('enter', parents=[external_parser], help='en
 create_parser.add_argument("--data_disk_only", help="wether to ONLY create a data disk.")
 create_parser.add_argument("--no_data_disk", help="wether to NOT create a data disk.")
 create_parser.add_argument("--data_as_dataset", help="whether data is just a dataset and not a whole (possibly virtual) disk")
-create_parser.add_argument("--overwrite_root_partition_table")
-create_parser.add_argument("--overwrite_data_partition_table")
-create_parser.add_argument("--reformat_boot_partition")
+create_parser.add_argument("--force-partition-main-disk")
+create_parser.add_argument("--force-partition-data-disk")
+create_parser.add_argument("--force-format-boot-partition")
 
 mount_parser.add_argument("--division", type=str, help="the suffix of a mirrored pool we are mounting (for a physical host)")
 
@@ -204,6 +204,36 @@ def create_blockdev(which, defaultsize, usersize, zvol_path):
 def refresh_partitions():
   exec("udevadm trigger -v --subsystem-match=block '--sysname-match=zd*' --action=change")
   exec("udevadm settle")
+  exec("partprobe")
+
+
+def check_is_partitioned(blockdev, which, force):
+  if is_partitioned(blockdev):
+    if force:
+      return True
+    else:
+      print(f"WARNING: {blockdev} is already partitioned. You can set the flag `--force-partition-{which}-disk` to repartition it.")
+
+def partition_main_disk(blockdev):
+  if check_is_partitioned(blockdev, "main", args.force_partition_main_disk):
+
+    print(f"partitioning main disk: {blockdev}")
+    error_message = f"could not format {blockdev}"
+    exec_or(f"parted {blockdev} -- mklabel gpt", error_message)
+    exec_or(f"parted {blockdev} -- mkpart {vmname}-boot 0% 1GiB", error_message)
+    exec_or(f"parted {blockdev} -- set 1 boot on", error_message)
+    exec_or(f"parted {blockdev} -- mkpart {vmname}-main 1GiB 100%", error_message)
+    refresh_partitions()
+
+def partition_data_disk(blockdev):
+  if check_is_partitioned(blockdev, "data", args.force_partition_data_disk):
+
+    print(f"partitioning data disk: {blockdev}")
+    error_message = f"could not format {blockdev}"
+    exec_or(f"parted {blockdev} -- mklabel gpt", error_message)
+    exec_or(f"parted {blockdev} -- mkpart {vmname}-data 0% 100%", error_message)
+    refresh_partitions()
+
 
 def create(args):
     
@@ -229,26 +259,11 @@ def create(args):
         create_blockdev("main", "10GiB", args.main_disk_size, zvol_path)
       blockdev = f"/dev/zvol/{zvol_path}"
     
-    
-      require_partition = False
-      if is_partitioned(blockdev):
-        if args.overwrite_root_partition_table:
-          require_partition = True
-        else:
-          print(f"WARNING: {blockdev} is already partitioned. You can set the flag `--overwrite-root-partition-table` to repartition it.")
-      else:
-        require_partition = True
-    
-      if require_partition:
-        print(f"partitioning root disk: {blockdev}")
-        error_message = f"could not format {blockdev}"
-        exec_or(f"parted {blockdev} -- mklabel gpt", error_message)
-        exec_or(f"parted {blockdev} -- mkpart {vmname}-boot 0% 1GiB", error_message)
-        exec_or(f"parted {blockdev} -- set 1 boot on", error_message)
-        exec_or(f"parted {blockdev} -- mkpart {vmname}-main 1GiB 100%", error_message)
-        refresh_partitions()
-      else:
-        print("Partitioning not required.")
+      if args.force_partition_main_disk:
+
+      if is_zpool_imported(vmname):
+        if args.force_partition_main_disk:
+          print(f"zpool `export_zpool(vmname)
     
       if not is_zpool_imported(vmname):
         print(f"zpool `{vmname}` is not yet imported.")
@@ -283,7 +298,7 @@ def create(args):
         print(f"formatting '{boot_partition}'")
         exec_or(f"mkfs.fat -F 32 -n \"{vmname[0:6]}-boot\" {boot_partition}", f"could not format: {boot_partition}")
       else:
-        print(f"WARNING: partition `{boot_partition}` is already formatted. You can set the flag `--overwrite-boot-partition` to reformat it.")
+        print(f"WARNING: partition `{boot_partition}` is already formatted. You can set the flag `--reformat-boot-partition` to reformat it.")
       
       
       if not is_mounted_as(boot_partition, f"{vmroot}/boot") and not exec_for_bool(f"mount /dev/disk/by-partlabel/{vmname}-boot boot"):
@@ -307,8 +322,11 @@ def create(args):
 
       data_pool = f"{vmname}-data"
 
+
       if is_zpool_imported(data_pool):
         print("data pool is already imported")
+
+        
 
       # print("check if data zpool is imported...")
       if not is_zpool_imported(data_pool):
@@ -328,19 +346,16 @@ def create(args):
           print("checking if data is unpartitioned...")
           require_partition = False
           if is_partitioned(blockdev):
-            if args.overwrite_data_partition_table:
+            if args.repartition_data_disk:
               print("overwriting data partition table is requested by the user...")
               require_partition = True
             else:
-              warn(f"{blockdev} is already partitioned. You can set the flag `--overwrite-data-partition-table` to repartition it.")
+              warn(f"{blockdev} is already partitioned. You can set the flag `--repartition-data-disk` to repartition it.")
           else:
             print("partitioning is required.")
             require_partition = True
           if require_partition:        
-            print(f"partitioning '{vmname}'")
-            error_message = f"could not format {blockdev}"
-            exec_or(f"parted {blockdev} -- mklabel gpt", error_message)
-            exec_or(f"parted {blockdev} -- mkpart {vmname}-data 0% 100%", error_message)
+           
             time.sleep(1)
             exec_or(f"zpool create {vmname}-data -R /mnt/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true"
               , error_message)
