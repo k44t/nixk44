@@ -160,13 +160,14 @@ def Log(message, level = LogLevels.UNKNOWN, show_additional_info = False, wrappe
             if ".vscode-server" in line or "/nix/store/" in line or "Apoeschllogging.py" in line:
                 continue
             else:
+                regexp_pattern = r'File "(.*?)"'
+                file = re.search(regexp_pattern, line).group(1)
                 regexp_pattern = r'in (.*?)\n'
-                regexp = re.compile(regexp_pattern)
-                match = re.search(regexp_pattern, line).group(1)
-                if match == "<module>":
-                    callstack = match
+                function = re.search(regexp_pattern, line).group(1)
+                if function == "<module>":
+                    callstack = file + ":" + function
                 else:
-                    callstack = callstack + "->" + match
+                    callstack = callstack + "->" + file + ":" + function
         callstack = callstack + ": "
 
     debugMessage = clicolors.BOLD + clicolors.OKGREEN + Get_timestamp() + " " + clicolors.OKBLUE + fileName + ":" + str(lineNumber) + " : "
