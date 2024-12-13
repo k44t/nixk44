@@ -10,7 +10,13 @@
 # @brief LogLevel, used in apoeschlutils logging capability.
 # ******************************************************************************
 from src.BetterEnumInstance import BetterEnumInstance
-from newLogLevel import newLogLevel
+from src.eLogLevels import eLogLevels
+
+
+class newLogLevels(eLogLevels):
+    UNKNOWN = eLogLevels.UNKNOWN
+    pass
+
 
 class LogLevel(BetterEnumInstance):
     @classmethod
@@ -19,6 +25,19 @@ class LogLevel(BetterEnumInstance):
         if len(args) > 0:
             newState = args[0]
         else:
-            newState = 5 # 5 is error
-        retVal = BetterEnumInstance.__new__(self, newState, LogLevel.__name__, eLogLevels)
+            newState = LogLevels.UNKNOWN
+        name = args[1]
+        retVal = BetterEnumInstance.__new__(self, newState, name, eLogLevels)
         return retVal
+
+
+LogLevels = newLogLevels()
+LogLevelDefinitions = [attr for attr in vars(eLogLevels) if not callable(getattr(eLogLevels, attr)) and not attr.startswith("__")]
+definitions = LogLevelDefinitions
+for definition in definitions:
+    definition_attr = getattr(eLogLevels, definition)
+    definition_value = definition_attr.value
+    definition_names = definition_attr.names
+    result_LogLevel = LogLevel(definition_value, definition, definition_names)
+    LogLevels.__setattr__(definition, result_LogLevel)
+print(LogLevels)

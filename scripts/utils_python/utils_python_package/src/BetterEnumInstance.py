@@ -18,28 +18,40 @@ class BetterEnumInstance():
         retVal = -1
         self.name = arg_name
         definitions = [attr for attr in vars(betterEnumStateDefinitions) if not callable(getattr(betterEnumStateDefinitions, attr)) and not attr.startswith("__")]
-        print(definitions)
         betterEnumStateTypes = []
         for betterEnumStateType in definitions:
+            #alexTODO: load definition from LogLevels not from NewLogLevels - wait, this is not possible!
             returnStateTypeDefinition = getattr(betterEnumStateDefinitions, betterEnumStateType)
             betterEnumStateTypes.append(returnStateTypeDefinition)
         if isinstance(arg_state, int):
             for betterEnumStateType in betterEnumStateTypes:
                 if betterEnumStateType.value == arg_state:
-                    self.state = betterEnumStateType
+                    new_state = BetterEnumEntry(betterEnumStateType.value, betterEnumStateType.names)
+                    self.state = new_state
                     retVal = 1
                     break
             if retVal != 1:
                 print("Could not convert state of type int ('" + str(arg_state) + "') to " + self.name + ". '" + str(arg_state) + "' is unknown.")
         elif isinstance(arg_state, str):
-            for betterEnumStateType in betterEnumStateTypes:
-                for alternative_string in betterEnumStateType.alternative_strings:
-                    if alternative_string.lower() == arg_state.lower():
-                        self.state = betterEnumStateType
+            try:
+                value = int(arg_state.lower())
+                for betterEnumStateType in betterEnumStateTypes:
+                    if betterEnumStateType.value == value:
+                        new_state = BetterEnumEntry(value, betterEnumStateType.names)
+                        self.state = new_state
                         retVal = 1
                         break
-                if retVal == 1:
-                    break
+                if retVal != 1:
+                    print("Could not convert state of type string ('" + str(arg_state) + "') to int " + arg_state + ". '" + str(arg_state) + "' is unknown.")
+            except Exception as e:
+                for betterEnumStateType in betterEnumStateTypes:
+                    for alternative_string in betterEnumStateType.names:
+                            if alternative_string.lower() == arg_state.lower():
+                                self.state = betterEnumStateType
+                                retVal = 1
+                                break
+                    if retVal == 1:
+                        break
             if retVal != 1:
                 print("Could not convert state of type string ('" + str(arg_state) + "') to " + self.name + ". '" + str(arg_state) + "' is unknown.")
         elif isinstance(arg_state, BetterEnumEntry):
@@ -55,7 +67,10 @@ class BetterEnumInstance():
 
     @classmethod
     def __new__(self, cls, *args):
-        retVal = BetterEnumInstance.__init__(self, args[0], args[1], args[2])
+        arg_state = args[0]
+        arg_name = args[1]
+        arg_betterEnumStateDefinitions = args[2]
+        retVal = BetterEnumInstance.__init__(self, arg_state, arg_name, arg_betterEnumStateDefinitions)
         if retVal != 1:
             return retVal
         else:

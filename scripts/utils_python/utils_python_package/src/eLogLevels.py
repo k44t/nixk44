@@ -10,14 +10,15 @@
 # @brief Definitions for eLogLevels.
 # ******************************************************************************
 from src.BetterEnum import BetterEnum
-from src.LogLevel import LogLevel
+from src.NewLogLevel import NewLogLevel
 
 class eLogLevels(BetterEnum):
-    ERROR = LogLevel(0, ["Error", "Failed", "Fail"])
-    SUCCESS = LogLevel(1, "Success")
-    INFO = LogLevel(2, "Info")
-    DEBUG = LogLevel(3, "Debug")
-    DEBCONFIG = LogLevel(4, "DebConfig")
-    UNKNOWN = LogLevel(5, "Unknown")
-    VERBOSE = LogLevel(6, "Verbose")
+    ERROR = NewLogLevel(0, ["Error", "Failed", "Fail"])
+    SUCCESS = NewLogLevel(1, "Success")
+    INFO = NewLogLevel(2, "Info")
+    DEBUG = NewLogLevel(3, "Debug")
+    DEBCONFIG = NewLogLevel(4, "DebConfig")
+    UNKNOWN = NewLogLevel(5, "Unknown")
+    VERBOSE = NewLogLevel(6, "Verbose")
+    WARNING = NewLogLevel(7, "Warning")
     FAILED = ERROR
