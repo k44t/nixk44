@@ -1,0 +1,1 @@
+creates a bash script named `certnix` which will – when invoked manually – create all configured keypairs, certificates, CAs, service and client certificates.
