@@ -12,7 +12,7 @@ from utils_python.utils_python_package.src.Apoeschllogging import *
 
 debug = True
 if debug:
-  Deb_set_printCallstack(True)
+  Deb_set_printCallstack(False)
 
 try:
   mount_parent = os.environ(['K44_VMM_MOUNT_ROOT'])
@@ -46,13 +46,13 @@ size_parser.add_argument("--data_disk_size", help="including a unit (10GiB, 1500
 size_parser.add_argument("--main_disk_size", help="including a unit (10GiB), 1500M, ...)")
 
 mountpoint_parser = argparse.ArgumentParser(add_help=False)
-mountpoint_parser.add_argument("--aditional_binds", default=[], help="additional binds that should be mounted. Paths given are relative to the host's root. Example: /new/mountpoint:/existing/path,/new/mountpoint2:/existing/path2")
+mountpoint_parser.add_argument("--additional_binds", type=str, default=None, help="additional binds that should be mounted. Paths given are relative to the host's root. Example: /new/mountpoint:/existing/path,/new/mountpoint2:/existing/path2")
 
 zvol_parser = argparse.ArgumentParser(add_help=False)
 zvol_parser.add_argument("--zvol_parent_path", default=K44_VMM_ZVOL_PARENT_PATH, help="the zfs parent path under which to create the block devices")
 
 # Add subparsers
-create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
+create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser, mountpoint_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
 mount_parser = subparser.add_parser('mount', parents=[shared_parser, mountpoint_parser], help='mount an already existing virtual machine.')
 unmount_parser = subparser.add_parser('unmount', parents=[shared_parser], help='unmount an already existing virtual machine.')
 resize_parser = subparser.add_parser('resize', parents=[shared_parser, zvol_parser, size_parser], help='resize an already existing virtual machine.')
@@ -97,7 +97,7 @@ def mkdirs(root, dirs):
     Log_info(f"created directory: {new_directory_name}")
 
 def is_zpool_imported(name):
-  Log_info(f"checking if pool `{name}` is already imported...")
+  Log_info(f"checking if zpool `{name}` is already imported...")
   return exec_for_status(f"zpool list -H -o name | grep -q '^{name}$'") == 0
   
 def is_zpool_importable(name):
@@ -117,10 +117,15 @@ def is_formatted(blockdev):
 def is_formatted_as(blockdev, filesystemtype):
   return exec_for_status(f"blkid {blockdev} | grep -q 'TYPE=\"{filesystemtype}\"'") == 0
 
-def zfs_exists(zfs_path):
+def does_zfs_dataset_exist(zfs_path):
   Log_info("checking if zfs exists...")
   result = exec_for_bool(f"zfs list -H -o name | grep -q '{zfs_path}'")
   return result
+
+def does_path_exist(path):
+  if os.path.islink(path) or os.path.isfile(path) or os.path.isdir(path):
+    return True
+  return False
 
 def throw(message):
   Log_error(message)
@@ -139,13 +144,9 @@ def chmods(path, elements, rights):
       Log_info(f"modify rights of '{element_to_be_changed}' to '{right}'")
 
 def is_bind_mounted_as(pointed, pointing):
-  Deb(pointing)
-  pointers = exec(f"findmnt --noheadings --output source {pointing}")
+  pointers = exec_for_list(f"findmnt --noheadings --output source {pointing}")
   regexp_pattern = r'\[(.*)\]'
   regexp_searcher = re.compile(regexp_pattern)
-  if type(pointers) != list:
-    pointers = [pointers]
-  Deb(pointers)
   for pointer in pointers:
     pointer = pointer.replace("\n", "")
     pointer_stripped = re.sub(regexp_pattern, '', pointer)
@@ -155,25 +156,25 @@ def is_bind_mounted_as(pointed, pointing):
       if "[" in mount["source"]:
         continue
       target_root = mount["target"]
-      Deb(regexp_searcher)
-      Deb(pointer)
-      Deb(regexp_searcher.search(pointer))
       target_path = regexp_searcher.search(pointer).groups()[0]
       target = os.path.join(target_root, target_path)
       if target == pointed:
         return True
   return False
 
-def bind_mount(pointing, pointed):
+def bind_mount(pointed, pointing):
   if not is_bind_mounted_as(pointed, pointing):
-    os.mkdirs(pointing, exist_ok=True)
-    exec_or(f"mount --bind '{pointed}' '{pointed}'", f"bind mount failed from (pointing) '{pointing}' to (pointed) '{pointed}' path.")
+    os.makedirs(pointing, exist_ok=True)
+    exec_or(f"mount --bind '{pointed}' '{pointing}'", f"bind mount failed from (pointing) '{pointing}' to (pointed) '{pointed}' path.")
 
 def mount_additional_binds(list):
-  for mnt in list.split(","):
-    r = mnt.split(":")
-    if len(r) != 2:
-      throw(f"--additional-binds malformatted.")
+  if list != None:
+    for mnt in list.split(","):
+      r = mnt.split(":")
+      if len(r) != 2:
+        throw(f"--additional-binds malformatted.")
+  else:
+    Log_info("no additional binds to mount were provided.")
 
 def exec_or(command, error_message):
   if not exec_for_bool(command):
@@ -200,6 +201,15 @@ def is_mounted(blockdev):
   list = get_mountpoints(blockdev)
   return len(list) != 0
 
+def yield_blockdev_path(which, defaultsize, usersize, zvol_path):
+  if not does_zfs_dataset_exist(zvol_path):
+    Log_info(f"creating zfs blockdev for {which}]-disk...")
+    create_blockdev(which, defaultsize, usersize, zvol_path)
+  else:
+    Log_info(f"zfs blockdev for {which}-disk already exists")
+  blockdev_path = f"/dev/zvol/{zvol_path}"
+  return blockdev_path
+
 def create_blockdev(which, defaultsize, usersize, zvol_path):
   Log_info(f"creating {which} disk: {zvol_path}")
   size = defaultsize
@@ -213,13 +223,16 @@ def refresh_partitions():
   exec("udevadm settle")
   exec("partprobe")
 
-
 def check_is_partitioned(blockdev, which):
   if is_partitioned(blockdev):
     Log_warn(f"{blockdev} is already partitioned. Please destroy the partition table of `{which}`-disk manually if you want me to recreate it. Don't forget to wipefs or else you'll confuse me.")
+    return True
+  else:
+    return False
 
 def possibly_partition_main_disk(blockdev):
-  if check_is_partitioned(blockdev, "main"):
+  Log_info(f"checking if `{blockdev}` is already partitioned...")
+  if not check_is_partitioned(blockdev, "main"):
     Log_info(f"partitioning main disk: {blockdev}")
     error_message = f"could not format {blockdev}"
     exec_or(f"parted {blockdev} -- mklabel gpt", error_message)
@@ -227,15 +240,20 @@ def possibly_partition_main_disk(blockdev):
     exec_or(f"parted {blockdev} -- set 1 boot on", error_message)
     exec_or(f"parted {blockdev} -- mkpart {vmname}-main 1GiB 100%", error_message)
     refresh_partitions()
+  else:
+    Log_info(f"`{blockdev}` is already partitioned.")
 
 def possibly_partition_data_disk(blockdev):
-  if check_is_partitioned(blockdev, "data"):
-
+  Log_info(f"checking if `{blockdev}` is already partitioned...")
+  if not check_is_partitioned(blockdev, "data"):
+    Log_info(f"`{blockdev}` is not yet partitioned.")
     Log_info(f"partitioning data disk: {blockdev}")
     error_message = f"could not format {blockdev}"
     exec_or(f"parted {blockdev} -- mklabel gpt", error_message)
     exec_or(f"parted {blockdev} -- mkpart {vmname}-data 0% 100%", error_message)
     refresh_partitions()
+  else:
+    Log_info(f"`{blockdev}` is already partitioned.")
 
 
 def create(args):
@@ -260,14 +278,9 @@ def create(args):
     
       zvol_path = f"{args.zvol_parent_path}/vm-{vmname}-vda"
     
-      if not zfs_exists(zvol_path):
-        Log_info("creating zfs blockdev for main-disk...")
-        create_blockdev("main", "10GiB", args.main_disk_size, zvol_path)
-      else:
-        Log_info(f"zfs blockdev for main-disk already exists")
-      blockdev = f"/dev/zvol/{zvol_path}"
+      blockdev_path = yield_blockdev_path("main", "10GiB", args.main_disk_size, zvol_path)
 
-      possibly_partition_main_disk(blockdev)
+      possibly_partition_main_disk(blockdev_path)
 
       Log_info("check if main zpool is imported...")
       if not is_zpool_imported(vmname):
@@ -278,18 +291,20 @@ def create(args):
           Log_info(f"zpool `{vmname}` imported. we assume that everything has been partitioned properly")
         else:
           Log_info("zpool is not importable.")
-          Log_info(f"creating main zpool: {vmname}")
           main_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-main"
-          if not os.path.isfile(main_partition_blockdev):
-            error_message = f"blockdev {main_partition_blockdev} should exist at this point. this is likely a bug."
+          Log_info(f"does zfs blockdev `{main_partition_blockdev}` exist...")
+          if not does_path_exist(main_partition_blockdev):
+            error_message = f"zfs blockdev {main_partition_blockdev} does not exist but should exist at this point. this is likely a bug."
             Log_error(error_message)
             raise BaseException(error_message)
+          else:
+            Log_info(f"zfs blockdev `{main_partition_blockdev}` exists.")
           exec_or(f"zpool create {vmname} -R {vmroot} /dev/disk/by-partlabel/{vmname}-main -o autotrim=on -O acltype=posix -O atime=off -O canmount=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=none", f"could not create zpool: {vmname}")
       else:
         Log_info(f"zpool `{vmname}` is already imported.")
     
       # for main, we need this, but data wont have this, see below
-      if not zfs_exists(f"{vmname}/fsroot"):
+      if not does_zfs_dataset_exist(f"{vmname}/fsroot"):
         Log_info(f"creating zfs: {vmname}/fsroot")
         exec_or(f"zfs create {vmname}/fsroot -o mountpoint=legacy -o normalization=formD", f"could not create zfs dataset: {vmname}/fsroot")
       else:
@@ -319,7 +334,7 @@ def create(args):
       
       if not is_mounted_as(boot_partition, f"{vmroot}/boot"):
         Log_info("mounting boot partition")
-        exec_or(f"mount {boot_partition} {vmroot}/boot", f"failed to mount boot_partition: `{blockdev}`")
+        exec_or(f"mount {boot_partition} {vmroot}/boot", f"failed to mount boot_partition: `{blockdev_path}`")
         Log_info(f"mounted `{boot_partition} {vmroot}/boot`")
     
     
@@ -329,7 +344,7 @@ def create(args):
       Log_info("data is dataset, checking data dataset")
       # create data as a dataset
       create_data_disk = False
-      if not zfs_exists(f"{vmname}/data") and not exec_for_bool(f"zfs create {vmname}/data -o mountpoint=/data -o com.sun:auto-snapshot=true"):
+      if not does_zfs_dataset_exist(f"{vmname}/data") and not exec_for_bool(f"zfs create {vmname}/data -o mountpoint=/data -o com.sun:auto-snapshot=true"):
         throw(f"failed to create zfs dataset: {vmname}/data")
     
     
@@ -338,39 +353,33 @@ def create(args):
       # create data disk
       zvol_path = f"{args.zvol_parent_path}/vm-{vmname}-data"
       
-      if not zfs_exists(zvol_path):
-        Log_info("creating zfs blockdev for data-disk...")
-        create_blockdev("data", "4GiB", args.data_disk_size, zvol_path)
-        Log_info("created blockdev for data.")
-      else:
-        Log_info(f"zfs blockdev for data-disk already exists")
-      blockdev = f"/dev/zvol/{args.zvol_parent_path}/{vmname}-data"
+      blockdev_path = yield_blockdev_path("data", "4GiB", args.data_disk_size, zvol_path)
 
       data_pool = f"{vmname}-data"
 
+      possibly_partition_data_disk(blockdev_path) 
 
-      if is_zpool_imported(data_pool):
-        Log_info("data pool is already imported")
-
-      possibly_partition_data_disk(blockdev) 
-
-      Log_info("check if data zpool is imported...")
+      Log_info(f"checking if zpool `{data_pool}` is not imported...")
       if not is_zpool_imported(data_pool):
-        Log_info("data zpool is not imported.")
-        Log_info("checking if data zpool is importable...")
+        Log_info(f"data zpool `{data_pool}` is not imported.")
+        Log_info(f"checking if data zpool `{data_pool}` is importable...")
         if is_zpool_importable(data_pool):
-          Log_info("data zpool is importable, trying to import it...")
+          Log_info(f"data zpool `{data_pool}` is importable, trying to import it...")
           import_zpool(data_pool)
-          Log_info("data zpool `{vmname}` imported. we assume that everything has been partitioned properly")
+          Log_info(f"data zpool `{vmname}` imported. we assume that everything has been partitioned properly")
         else:
           Log_info("zpool is not importable.")
-          Log_info("does zfs blockdev exist?")
           data_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-data"
-          if not os.path.isfile(data_partition_blockdev):
-            error_message = f"blockdev {data_partition_blockdev} should exist at this point. this is likely a bug."
+          Log_info(f"does zfs blockdev `{data_partition_blockdev}` exist...")
+          if not does_path_exist(data_partition_blockdev):
+            error_message = f"zfs blockdev `{data_partition_blockdev}` does not exist but should exist at this point. this is likely a bug."
             Log_error(error_message)
             raise BaseException(error_message)
-          exec_or(f"zpool create {vmname}-data -R /mnt/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", error_message)
+          else:
+            Log_info(f"zfs blockdev `{data_partition_blockdev}` exists.")
+          Log_info(f"create zpool `{vmname}-data `...")
+          exec_or(f"zpool create {vmname}-data -R /mnt/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {vmname}")
+          Log_info(f"zpool `{vmname}-data ` created.")
       else:
         Log_info(f"data zpool `{vmname}` is already imported.")
 
