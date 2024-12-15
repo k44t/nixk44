@@ -32,11 +32,14 @@ except Exception as e:
 
 # Create the parser
 parser = argparse.ArgumentParser(description="virtual machine worker")
+parser.add_argument("-v", "--verbose", default=False, action='store_true', help="print verbose output")
+parser.add_argument("-s", "--silent", default=False, action='store_true', help="dont print nixos-output output")
 
 subparser = parser.add_subparsers(required=True)
 
 shared_parser = argparse.ArgumentParser(add_help=False)
 shared_parser.add_argument("vmname", type=str, help="the name of the vm")
+
 
 external_parser = argparse.ArgumentParser(add_help=False)
 external_parser.add_argument("--path", type=str, help="path to where the nixos installation is mounted")
@@ -73,21 +76,75 @@ enter_parser.add_argument("vmname", type=str, help="the name of the vm")
 def is_partitioned(blockdev):
   # -s means script
   # -q means that grep suppresses all output and only returns the exist status
-  return exec_for_bool(f"parted -s {blockdev} print")
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"parted -s {blockdev} print")
+  return returncode
 
 def exec_for_status(command):
-  Log_info(f"running command: `{command}`")
-  result = subprocess.run(command, shell=True, capture_output=True)
-  return result.returncode
+  result = exec(command)
+  return result
 
 # returns true if the command succe
 def exec_for_bool(command):
-  return exec_for_status(command) == 0
+  retVal = False
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_status(command)
+  if returncode == 0:
+    retVal = True
+  return retVal, formatted_output, formatted_response, formatted_error
 
 # we are overriding python's internal exec, which would execute python code dynamically, because we don't need nor like it
 def myexec(command):
   Log_info(f"running command: `{command}`")
-  return os.popen(command).read()
+  if verbose:
+    process = subprocess.Popen(command, 
+                            shell=True)
+  else:
+    process = subprocess.Popen(command, 
+                            shell=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+  formatted_output = []
+  formatted_response = []
+  formatted_error = []
+  #set blocking to not blocking is necessary so that readline wont block when the process already finished. this only works on linux systems!
+  os.set_blocking(process.stdout.fileno(), False)
+  os.set_blocking(process.stderr.fileno(), False)
+  try:
+    while process.poll() is None:
+      if process.stdout != None:
+        response_line = process.stdout.readline().decode("utf-8").replace("\n", "")
+        if not silent and response_line != "":
+          print(response_line)
+      if process.stderr != None:
+        error_line = process.stderr.readline().decode("utf-8").replace("\n", "")
+        if not silent and error_line != "":
+          print(error_line)
+      formatted_response.append(response_line)
+      formatted_output.append(response_line)
+      formatted_error.append(error_line)
+      formatted_output.append(error_line)
+  except Exception as e:
+    pass
+  try:
+    response = process.stdout.readlines()
+    for line in response: 
+      line = line.decode("utf-8").replace("\n", "")
+      if not silent and line != "":
+        print(line)
+      formatted_response.append(line)
+      formatted_output.append(line)
+  except Exception as e:
+    pass
+  try:
+    error = process.stderr.readlines()
+    for line in error: 
+      line = line.decode("utf-8").replace("\n", "")
+      if not silent and line != "":
+        print(line)
+      formatted_error.append(line)
+      formatted_output.append(line)
+  except Exception as e:
+    pass
+  return process.returncode, formatted_output, formatted_response, formatted_error
 exec = myexec
 
 def mkdirs(root, dirs): 
@@ -119,8 +176,8 @@ def is_formatted_as(blockdev, filesystemtype):
 
 def does_zfs_dataset_exist(zfs_path):
   Log_info("checking if zfs exists...")
-  result = exec_for_bool(f"zfs list -H -o name | grep -q '{zfs_path}'")
-  return result
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"zfs list -H -o name | grep -q '{zfs_path}'")
+  return returncode
 
 def does_path_exist(path):
   if os.path.islink(path) or os.path.isfile(path) or os.path.isdir(path):
@@ -177,8 +234,11 @@ def mount_additional_binds(list):
     Log_info("no additional binds to mount were provided.")
 
 def exec_or(command, error_message):
-  if not exec_for_bool(command):
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(command)
+  if not returncode:
     throw(error_message)
+  else:
+    return returncode, formatted_output, formatted_response, formatted_error
 
 def exec_for_list(command):
   Log_info(f"running command: `{command}`")
@@ -267,8 +327,6 @@ def create(args):
 
     partition_prefix = f"/dev/disk/by-partlabel/{vmname}"
     
-    vmroot = f"{mount_parent}/{vmname}"
-
     if not args.data_disk_only:
 
         # create main disk
@@ -317,7 +375,7 @@ def create(args):
 
       if is_zfs_manual_mount(f"{vmname}/fsroot"):
         Log_info(f"mount zfs '{vmname}/fsroot' manually...")
-        exec_or(f"mount -t zfs {vmname}/fsroot /mnt/{vmname}", f"could not mount zfs dataset: {vmname}/fsroot")
+        exec_or(f"mount -t zfs {vmname}/fsroot /var/vmm/{vmname}", f"could not mount zfs dataset: {vmname}/fsroot")
     
       mkdirs(f"{vmroot}", ["boot", "etc", "nix", "data", "root", "home"])
       chmods(f"{vmroot}", ["etc", "nix", "data", "home"], [stat.S_IREAD, stat.S_IEXEC])
@@ -344,7 +402,8 @@ def create(args):
       Log_info("data is dataset, checking data dataset")
       # create data as a dataset
       create_data_disk = False
-      if not does_zfs_dataset_exist(f"{vmname}/data") and not exec_for_bool(f"zfs create {vmname}/data -o mountpoint=/data -o com.sun:auto-snapshot=true"):
+      returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"zfs create {vmname}/data -o mountpoint=/data -o com.sun:auto-snapshot=true")
+      if not does_zfs_dataset_exist(f"{vmname}/data") and not returncode:
         throw(f"failed to create zfs dataset: {vmname}/data")
     
     
@@ -378,8 +437,8 @@ def create(args):
           else:
             Log_info(f"zfs blockdev `{data_partition_blockdev}` exists.")
           Log_info(f"create zpool `{vmname}-data `...")
-          exec_or(f"zpool create {vmname}-data -R /mnt/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {vmname}")
-          Log_info(f"zpool `{vmname}-data ` created.")
+          exec_or(f"zpool create {vmname}-data -R /var/vmm/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {vmname}")
+          Log_info(f"zpool `{vmname}-data` created.")
       else:
         Log_info(f"data zpool `{vmname}` is already imported.")
 
@@ -392,13 +451,15 @@ def create(args):
 
 def legacy_mount_zfs(zfs_path, fs_path, allow_failure=False):
   if not is_mounted_as(zfs_path, fs_path):
-    if not exec_for_bool(f"mount -t zfs {zfs_path} {fs_path}") and not allow_failure:
+    returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"mount -t zfs {zfs_path} {fs_path}")
+    if not returncode and not allow_failure:
         throw(f"failed to mount zfs: `{zfs_path}` @ `{fs_path}`")
 
 def is_vm_running(vmname):
   # --name: return only the name
   # -q: no output, only exit code for success or failure
-  return exec_for_bool(f"virsh list --name | grep -q '^{vmname}$'")
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"virsh list --name | grep -q '^{vmname}$'")
+  return returncode
 
 def guard_vm_running(vmname):
   vm_was_running = False
@@ -423,8 +484,6 @@ def mount(args):
   
   Log_info(f"mounting host '{vmname}'...")
 
-  vmroot = f"{mount_parent}/{vmname}"
-
   os.mkdir(f"{vmroot}")
 
   partition_prefix = "/dev/disk/by-partlabel/{vmname}"
@@ -442,19 +501,19 @@ def mount(args):
   legacy_mount_zfs(f"{vmname}/nix", f"{vmroot}/nix", allow_failure=True)
   legacy_mount_zfs(f"{vmname}/data", f"{vmroot}/data", allow_failure=True)
   exec(f"zfs mount {vmname}/data")
-  (f"zpool import {vmname}-data -f -R /mnt/{vmname}")
+  (f"zpool import {vmname}-data -f -R /var/vmm/{vmname}")
   legacy_mount_zfs(f"{vmname}-data", f"{vmroot}/data")
   mount_zfs(f"{vmname}/data")
   do_mount(f"{partition_prefixsion}-boot" f"{vmroot}/boot")
   
-  bind(f"mount -o bind /mnt/{vmname}/data/home/ /mnt/{vmname}/home/")
-  exec(f"mount -o bind /mnt/{vmname}/data/root/ /mnt/{vmname}/root/")
+  bind(f"mount -o bind /var/vmm/{vmname}/data/home/ /var/vmm/{vmname}/home/")
+  exec(f"mount -o bind /var/vmm/{vmname}/data/root/ /var/vmm/{vmname}/root/")
   mount_additional_binds(args.additional_binds)
 
 def unmount(args):
   guard_vm_running(vmname)
   Log_info(f"unmounting host '{vmname}'...")
-  exec(f"umount -R /mnt/{vmname}")
+  exec(f"umount -R /var/vmm/{vmname}")
   exec(f"zpool export {vmname}")
   exec(f"zpool export {vmname}-data")
 
@@ -469,14 +528,26 @@ def install(args):
   vmorg = args.vmorg
   if root == None:
     root = f"{mount_parent}/{vmname}"
-  exec(f"nixos-install --flake {K44_VMM_ZION_PATH}/{vmorg}/hosts/{vmname}#{vmname} --root {root} --impure --no-root-passwd")
+  returncode, install_output, install_result, install_error = exec(f"cd {K44_VMM_ZION_PATH}; nixos-install --flake ./{vmorg}/hosts/{vmname}#{vmname} --root {root} --impure --no-root-passwd")
+  if not isinstance(install_result, list):
+    install_result = [install_result]
+  install_result_string = ""
+  for line in install_result:
+    install_result_string = install_result_string + line
+    if len(install_result) == 1 and "configuration file" in line and "doesn't exist" in line:
+      Log_error(line + f"\nMaybe you did not checkin the nix files into git? In order for install to work, the .nix file and all of the config files for your new server `{vmname}` must exist in `/#/zion/k44/feu/hosts/{vmname}` and those files must be commited to git, so that nixos-install can find them.")
+  install_error_string = ""
+  for line in install_error:
+    install_error_string = install_error_string + line
+    if f"error: attribute '{vmname}' missing" in line:
+      Log_error(line + f"\nMaybe the NIX_PATH is not set properly? e.g. '/#/zion/k44/knet' should probably be not in there and you have to remove it!\n\nAlso make sure you have added `{vmname}` to /#/zion/k44/feu/common/organisation.nix -> hosts!")
+
 
 def enter(args):
   guard_vm_running(vmname)
   if args.path != None:
     exec(f"nixos-enter --root {args.path}")
   else:
-    vmroot = f"{mount_parent}/{vmname}"
     exec(f"nixos-enter --root {vmroot}")
 
 create_parser.set_defaults(func=create)
@@ -492,5 +563,9 @@ enter_parser.set_defaults(func=enter)
 
 args = parser.parse_args()
 vmname = args.vmname
+vmroot = f"{mount_parent}/{vmname}"
+verbose = args.verbose
+silent = args.silent
 Log_info("parsing args...")
 args.func(args)
+time.sleep(1)
