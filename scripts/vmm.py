@@ -445,20 +445,21 @@ def create(args):
     if create_data_disk:
       Log_info("creating data disk (if necessary)")
       # create data disk
-      zvol_path = f"{args.zvol_parent_path}/vm-{vmname}-data"
+      data_tag = "data"
+      data_pool = f"{vmname}-{data_tag}"
+      zvol_path = f"{args.zvol_parent_path}/vm-{data_pool}"
       
-      blockdev_path = yield_blockdev_path("data", "4GiB", args.data_disk_size, zvol_path)
+      blockdev_path = yield_blockdev_path({data_tag}, "4GiB", args.data_disk_size, zvol_path)
 
-      data_pool = f"{vmname}-data"
 
       possibly_partition_data_disk(blockdev_path) 
 
       Log_info(f"checking if zpool `{data_pool}` is not imported...")
-      if zpool_ensure_import_if_importable(vmname):
-        Log_info(f"zpool `{vmname}` is imported.")
+      if zpool_ensure_import_if_importable(data_pool):
+        Log_info(f"zpool `{data_pool}` is imported.")
       else:
         Log_info("zpool is not importable.")
-        data_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-data"
+        data_partition_blockdev = f"/dev/disk/by-partlabel/{data_pool}"
         Log_info(f"does zfs blockdev `{data_partition_blockdev}` exist...")
         if not does_path_exist(data_partition_blockdev):
           error_message = f"zfs blockdev `{data_partition_blockdev}` does not exist but should exist at this point. this is likely a bug."
@@ -466,15 +467,15 @@ def create(args):
           raise BaseException(error_message)
         else:
           Log_info(f"zfs blockdev `{data_partition_blockdev}` exists.")
-        Log_info(f"create zpool `{vmname}-data `...")
-        exec_or(f"zpool create {vmname}-data -R /var/vmm/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {vmname}")
-        Log_info(f"zpool `{vmname}-data` created.")
+        Log_info(f"create zpool `{data_pool} `...")
+        exec_or(f"zpool create {data_pool} -R /var/vmm/{data_pool} /dev/disk/by-partlabel/{data_pool} -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/{data_tag} -O com.sun:auto-snapshot=true", f"could not create zpool: {data_pool}")
+        Log_info(f"zpool `{data_pool}` created.")
 
-
-    mkdirs(f"{vmroot}/data", ["root", "home"])
-    chmods_add(f"{vmroot}/data", [".", "home"], [stat.S_IREAD, stat.S_IEXEC])
-    bind_mount(f"{vmroot}/data/root", f"{vmroot}/root")
-    bind_mount(f"{vmroot}/data/home", f"{vmroot}/home")
+    data_pool_location = f"{vmroot}/{data_tag}"
+    mkdirs(f"{data_pool_location}", ["root", "home"])
+    chmods_add(f"{data_pool_location}", [".", "home"], [stat.S_IREAD, stat.S_IEXEC])
+    bind_mount(f"{data_pool_location}/root", f"{vmroot}/root")
+    bind_mount(f"{data_pool_location}/home", f"{vmroot}/home")
     mount_additional_binds(args.additional_binds)
 
 def legacy_mount_zfs(zfs_path, fs_path, allow_failure=False):
