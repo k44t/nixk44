@@ -120,6 +120,8 @@ def Log_info(message, level = LogLevels.INFO, show_additional_info = False):
 def Log_error(message, level = LogLevels.ERROR, show_additional_info = False):
     Log(message, level, show_additional_info, wrapper=True)
 
+def Log_no_header(message, level = LogLevels.UNKNOWN, show_additional_info = False):
+    Output_thread.Add_to_queue(message)
     
 def Deb(message, level = LogLevels.DEBUG, show_additional_info = False):
     Log(message, level, show_additional_info, wrapper=True)
@@ -153,21 +155,24 @@ def Log(message, level = LogLevels.UNKNOWN, show_additional_info = False, wrappe
 
 
     if Deb_printCallstack:
-        callStack = ""
+        callstack = ""
         raw_tb = traceback.extract_stack()
         entries = traceback.format_list(raw_tb)
         for line in entries:
             if ".vscode-server" in line or "/nix/store/" in line or "Apoeschllogging.py" in line:
                 continue
             else:
+                regexp_pattern = r'line (.*?),'
+                line_number = re.search(regexp_pattern, line).group(1)
+                line_number = clicolors.DEBUG + line_number + clicolors.OKBLUE
                 regexp_pattern = r'File "(.*?)"'
                 file = re.search(regexp_pattern, line).group(1)
                 regexp_pattern = r'in (.*?)\n'
                 function = re.search(regexp_pattern, line).group(1)
                 if function == "<module>":
-                    callstack = file + ":" + function
+                    callstack = file + ":" + line_number + ":" + function
                 else:
-                    callstack = callstack + "->" + file + ":" + function
+                    callstack = callstack + "->" + file + ":" + line_number + ":" + function
         callstack = callstack + ": "
 
     debugMessage = clicolors.BOLD + clicolors.OKGREEN + Get_timestamp() + " " + clicolors.OKBLUE + fileName + ":" + str(lineNumber) + " : "
@@ -179,7 +184,10 @@ def Log(message, level = LogLevels.UNKNOWN, show_additional_info = False, wrappe
             debugMessage = debugMessage + levelMessage
         else:
             debugMessage = debugMessage + str(level) + ": "
-    if LogLevels.ERROR == level:
+            
+    if LogLevels.WARNING == level:
+        debugMessage = debugMessage + clicolors.WARNING + str(message)
+    elif LogLevels.ERROR == level:
         debugMessage = debugMessage + str(message)
     elif LogLevels.DEBUG == level:
         debugMessage = debugMessage + clicolors.DEBUG + str(message) + clicolors.ENDCOLOR

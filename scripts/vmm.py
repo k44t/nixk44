@@ -113,35 +113,39 @@ def myexec(command):
       if process.stdout != None:
         response_line = process.stdout.readline().decode("utf-8").replace("\n", "")
         if not silent and response_line != "":
-          print(response_line)
+          Log_no_header(response_line)
       if process.stderr != None:
         error_line = process.stderr.readline().decode("utf-8").replace("\n", "")
         if not silent and error_line != "":
-          print(error_line)
-      formatted_response.append(response_line)
-      formatted_output.append(response_line)
-      formatted_error.append(error_line)
-      formatted_output.append(error_line)
+          Log_no_header(error_line)
+      if response_line != "":
+        formatted_response.append(response_line)
+        formatted_output.append(response_line)
+      if error_line != "":
+        formatted_error.append(error_line)
+        formatted_output.append(error_line)
   except Exception as e:
     pass
   try:
     response = process.stdout.readlines()
     for line in response: 
       line = line.decode("utf-8").replace("\n", "")
-      if not silent and line != "":
-        print(line)
-      formatted_response.append(line)
-      formatted_output.append(line)
+      if line != "":
+        if not silent:
+          Log_no_header(line)
+        formatted_response.append(line)
+        formatted_output.append(line)
   except Exception as e:
     pass
   try:
     error = process.stderr.readlines()
     for line in error: 
       line = line.decode("utf-8").replace("\n", "")
-      if not silent and line != "":
-        print(line)
-      formatted_error.append(line)
-      formatted_output.append(line)
+      if line != "":
+        if not silent:
+          Log_no_header(line)
+        formatted_error.append(line)
+        formatted_output.append(line)
   except Exception as e:
     pass
   return process.returncode, formatted_output, formatted_response, formatted_error
@@ -155,10 +159,12 @@ def mkdirs(root, dirs):
 
 def is_zpool_imported(name):
   Log_info(f"checking if zpool `{name}` is already imported...")
-  return exec_for_status(f"zpool list -H -o name | grep -q '^{name}$'") == 0
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_status(f"zpool list -H -o name | grep -q --extended-regexp '^{name}$'")
+  return returncode == 0
   
 def is_zpool_importable(name):
-  exec_for_status(f"zpool import | grep -q 'pool: {name}'") == 0
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_status(f"zpool import | grep -q 'pool: {name}'")
+  return returncode == 0
 
 def yes(question):
   Log_warn(question + " (type yes):")
@@ -166,13 +172,22 @@ def yes(question):
   return is_sure == "yes"
 
 def is_zfs_manual_mount(zfs_path):
-  return exec(f"zfs get mountpoint {zfs_path} -H -o value") == "legacy"
+  returncode, formatted_output, formatted_response, formatted_error = exec(f"zfs get mountpoint {zfs_path} -H -o value")
+  if "dataset does not exist" in formatted_output[0]:
+    Log_warn("dataset does not exist: this just means it is not a legacy mount and instead a normal mount")
+    return False
+  if "legacy" in formatted_response:
+    return True
+  else:
+    return False
 
 def is_formatted(blockdev):
-  return exec_for_status(f"blkid {blockdev} | grep -q 'TYPE='") == 0
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_status(f"blkid {blockdev} | grep -q 'TYPE='")
+  return returncode == 0
 
 def is_formatted_as(blockdev, filesystemtype):
-  return exec_for_status(f"blkid {blockdev} | grep -q 'TYPE=\"{filesystemtype}\"'") == 0
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_status(f"blkid {blockdev} | grep -q 'TYPE=\"{filesystemtype}\"'")
+  return returncode == 0
 
 def does_zfs_dataset_exist(zfs_path):
   Log_info("checking if zfs exists...")
@@ -188,17 +203,20 @@ def throw(message):
   Log_error(message)
   raise ValueError(message)
 
-def chmods(path, elements, rights):
+def chmods_add(path, elements, rights):
   for element in elements:
+    resulting_right = 0
     for right in rights:
-      element_to_be_changed = f"{path}/{element}"
-      try:
-        os.chmod(element_to_be_changed, right)
-      except Exception as e:
-        error_message = f"Could not change file mods, are you root? Error: '{e}'"
-        Log_error(error_message)
-        raise BaseException(error_message)
-      Log_info(f"modify rights of '{element_to_be_changed}' to '{right}'")
+      resulting_right = resulting_right | right
+    element_to_be_changed = f"{path}/{element}"
+    try:
+      st = os.stat(element_to_be_changed)
+      os.chmod(element_to_be_changed, st.st_mode | right)
+    except Exception as e:
+      error_message = f"Could not change file mods, are you root? Error: '{e}'"
+      Log_error(error_message)
+      raise BaseException(error_message)
+    Log_info(f"modify rights of '{element_to_be_changed}' to '{resulting_right}'")
 
 def is_bind_mounted_as(pointed, pointing):
   pointers = exec_for_list(f"findmnt --noheadings --output source {pointing}")
@@ -207,7 +225,10 @@ def is_bind_mounted_as(pointed, pointing):
   for pointer in pointers:
     pointer = pointer.replace("\n", "")
     pointer_stripped = re.sub(regexp_pattern, '', pointer)
-    mount_json_string = exec(f"findmnt --noheadings --output source,target {pointer_stripped} --json")
+    returncode, formatted_output, formatted_response, formatted_error = exec(f"findmnt --noheadings --output source,target {pointer_stripped} --json")
+    mount_json_string = ""
+    for line in formatted_output:
+      mount_json_string = mount_json_string + line
     mounts_json = json.loads(mount_json_string)
     for mount in mounts_json["filesystems"]:
       if "[" in mount["source"]:
@@ -220,6 +241,7 @@ def is_bind_mounted_as(pointed, pointing):
   return False
 
 def bind_mount(pointed, pointing):
+  #alexTODO: check if this works as expected
   if not is_bind_mounted_as(pointed, pointing):
     os.makedirs(pointing, exist_ok=True)
     exec_or(f"mount --bind '{pointed}' '{pointing}'", f"bind mount failed from (pointing) '{pointing}' to (pointed) '{pointed}' path.")
@@ -253,9 +275,12 @@ def get_mountpoints(blockdev_or_zfs_path):
 def get_bind_mountpoints(pointer):
   return exec_for_list(f"findmnt --noheadings --output source {pointer}")
 
-def is_mounted_as(blockdev, path):
+def is_mounted_as(blockdev, mount_path):
   paths = get_mountpoints(blockdev)
-  return path in paths
+  for path in paths:
+    if mount_path in path:
+      return True
+  return False
 
 def is_mounted(blockdev):
   list = get_mountpoints(blockdev)
@@ -315,14 +340,31 @@ def possibly_partition_data_disk(blockdev):
   else:
     Log_info(f"`{blockdev}` is already partitioned.")
 
+def zpool_ensure_import_if_importable(vmname):
+  if not is_zpool_imported(vmname):
+    Log_info(f"zpool `{vmname}` is not yet imported.")
+    if is_zpool_importable(vmname):
+      Log_info(f"zpool `{vmname}` is importable. try to import zpool `{vmname}`...")
+      import_zpool(vmname)
+      Log_info(f"zpool `{vmname}` imported. we assume that everything has been partitioned properly")
+      return True
+    else:
+      return False
+  else:
+    return True
+
+def classic_mount_if_not_mounted(partition, path, blockdev_path):
+  if not is_mounted_as(partition, f"{path}"):
+    Log_info("mounting partition")
+    exec_or(f"mount {partition} {path}", f"failed to mount partition: `{blockdev_path}`")
+    Log_info(f"mounted `{partition} {path}`")
+
 
 def create(args):
-    
     if args.zvol_parent_path == None:
       Log_error("ERROR: the following arguments are required: --zvol_parent_path")
       return
 
-    guard_vm_running(vmname)
     
 
     partition_prefix = f"/dev/disk/by-partlabel/{vmname}"
@@ -341,25 +383,19 @@ def create(args):
       possibly_partition_main_disk(blockdev_path)
 
       Log_info("check if main zpool is imported...")
-      if not is_zpool_imported(vmname):
-        Log_info(f"zpool `{vmname}` is not yet imported.")
-        if is_zpool_importable(vmname):
-          Log_info(f"zpool `{vmname}` is importable. try to import zpool `{vmname}`...")
-          import_zpool(vmname, f"")
-          Log_info(f"zpool `{vmname}` imported. we assume that everything has been partitioned properly")
-        else:
-          Log_info("zpool is not importable.")
-          main_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-main"
-          Log_info(f"does zfs blockdev `{main_partition_blockdev}` exist...")
-          if not does_path_exist(main_partition_blockdev):
-            error_message = f"zfs blockdev {main_partition_blockdev} does not exist but should exist at this point. this is likely a bug."
-            Log_error(error_message)
-            raise BaseException(error_message)
-          else:
-            Log_info(f"zfs blockdev `{main_partition_blockdev}` exists.")
-          exec_or(f"zpool create {vmname} -R {vmroot} /dev/disk/by-partlabel/{vmname}-main -o autotrim=on -O acltype=posix -O atime=off -O canmount=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=none", f"could not create zpool: {vmname}")
+      if zpool_ensure_import_if_importable(vmname):
+        Log_info(f"zpool `{vmname}` is imported.")
       else:
-        Log_info(f"zpool `{vmname}` is already imported.")
+        Log_info("zpool is not importable.")
+        main_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-main"
+        Log_info(f"does zfs blockdev `{main_partition_blockdev}` exist...")
+        if not does_path_exist(main_partition_blockdev):
+          error_message = f"zfs blockdev {main_partition_blockdev} does not exist but should exist at this point. this is likely a bug."
+          Log_error(error_message)
+          raise BaseException(error_message)
+        else:
+          Log_info(f"zfs blockdev `{main_partition_blockdev}` exists.")
+        exec_or(f"zpool create {vmname} -R {vmroot} /dev/disk/by-partlabel/{vmname}-main -o autotrim=on -O acltype=posix -O atime=off -O canmount=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=none", f"could not create zpool: {vmname}")
     
       # for main, we need this, but data wont have this, see below
       if not does_zfs_dataset_exist(f"{vmname}/fsroot"):
@@ -375,10 +411,13 @@ def create(args):
 
       if is_zfs_manual_mount(f"{vmname}/fsroot"):
         Log_info(f"mount zfs '{vmname}/fsroot' manually...")
-        exec_or(f"mount -t zfs {vmname}/fsroot /var/vmm/{vmname}", f"could not mount zfs dataset: {vmname}/fsroot")
-    
+        returncode, formatted_output, formatted_response, formatted_error = exec(f"mount -t zfs {vmname}/fsroot /var/vmm/{vmname}")
+        if 0 != returncode:
+          if not yes(f"could not mount zfs dataset: `{vmname}/fsroot`. Error: `{formatted_error[0]}` Do you want to continue?"):
+            exit()
+
       mkdirs(f"{vmroot}", ["boot", "etc", "nix", "data", "root", "home"])
-      chmods(f"{vmroot}", ["etc", "nix", "data", "home"], [stat.S_IREAD, stat.S_IEXEC])
+      chmods_add(f"{vmroot}", ["etc", "nix", "data", "home"], [stat.S_IREAD, stat.S_IEXEC])
     
       Log_info("checking boot partition")
     
@@ -389,11 +428,7 @@ def create(args):
       else:
         Log_warn(f"partition `{boot_partition}` is already formatted. You can set the flag `--reformat-boot-partition` to reformat it.")
       
-      
-      if not is_mounted_as(boot_partition, f"{vmroot}/boot"):
-        Log_info("mounting boot partition")
-        exec_or(f"mount {boot_partition} {vmroot}/boot", f"failed to mount boot_partition: `{blockdev_path}`")
-        Log_info(f"mounted `{boot_partition} {vmroot}/boot`")
+      classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot", blockdev_path)
     
     
     create_data_disk = not args.no_data_disk
@@ -419,32 +454,25 @@ def create(args):
       possibly_partition_data_disk(blockdev_path) 
 
       Log_info(f"checking if zpool `{data_pool}` is not imported...")
-      if not is_zpool_imported(data_pool):
-        Log_info(f"data zpool `{data_pool}` is not imported.")
-        Log_info(f"checking if data zpool `{data_pool}` is importable...")
-        if is_zpool_importable(data_pool):
-          Log_info(f"data zpool `{data_pool}` is importable, trying to import it...")
-          import_zpool(data_pool)
-          Log_info(f"data zpool `{vmname}` imported. we assume that everything has been partitioned properly")
-        else:
-          Log_info("zpool is not importable.")
-          data_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-data"
-          Log_info(f"does zfs blockdev `{data_partition_blockdev}` exist...")
-          if not does_path_exist(data_partition_blockdev):
-            error_message = f"zfs blockdev `{data_partition_blockdev}` does not exist but should exist at this point. this is likely a bug."
-            Log_error(error_message)
-            raise BaseException(error_message)
-          else:
-            Log_info(f"zfs blockdev `{data_partition_blockdev}` exists.")
-          Log_info(f"create zpool `{vmname}-data `...")
-          exec_or(f"zpool create {vmname}-data -R /var/vmm/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {vmname}")
-          Log_info(f"zpool `{vmname}-data` created.")
+      if zpool_ensure_import_if_importable(vmname):
+        Log_info(f"zpool `{vmname}` is imported.")
       else:
-        Log_info(f"data zpool `{vmname}` is already imported.")
+        Log_info("zpool is not importable.")
+        data_partition_blockdev = f"/dev/disk/by-partlabel/{vmname}-data"
+        Log_info(f"does zfs blockdev `{data_partition_blockdev}` exist...")
+        if not does_path_exist(data_partition_blockdev):
+          error_message = f"zfs blockdev `{data_partition_blockdev}` does not exist but should exist at this point. this is likely a bug."
+          Log_error(error_message)
+          raise BaseException(error_message)
+        else:
+          Log_info(f"zfs blockdev `{data_partition_blockdev}` exists.")
+        Log_info(f"create zpool `{vmname}-data `...")
+        exec_or(f"zpool create {vmname}-data -R /var/vmm/{vmname} /dev/disk/by-partlabel/{vmname}-data -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {vmname}")
+        Log_info(f"zpool `{vmname}-data` created.")
 
 
     mkdirs(f"{vmroot}/data", ["root", "home"])
-    chmods(f"{vmroot}/data", [".", "home"], [stat.S_IREAD, stat.S_IEXEC])
+    chmods_add(f"{vmroot}/data", [".", "home"], [stat.S_IREAD, stat.S_IEXEC])
     bind_mount(f"{vmroot}/data/root", f"{vmroot}/root")
     bind_mount(f"{vmroot}/data/home", f"{vmroot}/home")
     mount_additional_binds(args.additional_binds)
@@ -452,13 +480,27 @@ def create(args):
 def legacy_mount_zfs(zfs_path, fs_path, allow_failure=False):
   if not is_mounted_as(zfs_path, fs_path):
     returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"mount -t zfs {zfs_path} {fs_path}")
+    if len(formatted_output) == 0:
+      return
+    if "is already mounted" in formatted_output[0]:
+      return
+    if "cannot be mounted" in formatted_output[0] and not allow_failure:
+      error_message = formatted_output[0]
+      Log_error(error_message)
+      raise BaseException(error_message)
     if not returncode and not allow_failure:
-        throw(f"failed to mount zfs: `{zfs_path}` @ `{fs_path}`")
+        error_message = f"failed to mount zfs: `{zfs_path}` @ `{fs_path}`"
+        Log_error(error_message)
+        raise BaseException(error_message)
+
+def mount_zfs(zfs_path, allow_failure=False):
+  #
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"zfs mount {vmname}/data")
 
 def is_vm_running(vmname):
   # --name: return only the name
   # -q: no output, only exit code for success or failure
-  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"virsh list --name | grep -q '^{vmname}$'")
+  returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"virsh list --name | grep -q --extended-regexp '^{vmname}$'")
   return returncode
 
 def guard_vm_running(vmname):
@@ -478,52 +520,68 @@ def guard_vm_running(vmname):
       throw(f"exiting...")
   return vm_was_running
 
-def mount(args):
+def mount_legacy_if_zfs_is_legacy_mount(zfs_path, fs_path):
+  if is_zfs_manual_mount(zfs_path):
+    legacy_mount_zfs(f"{zfs_path}", f"{fs_path}")
 
-  guard_vm_running(vmname)
+
+def mount(args):
   
   Log_info(f"mounting host '{vmname}'...")
+  if not os.path.isdir(f"{vmroot}"):
+    os.mkdir(f"{vmroot}")
 
-  os.mkdir(f"{vmroot}")
+  partition_prefix = f"/dev/disk/by-partlabel/{vmname}"
 
-  partition_prefix = "/dev/disk/by-partlabel/{vmname}"
-
+  #alexTODO: division needs to be implemented (see http://etzchaim.k44/FeuK44/nixk44/-/issues/2)
   division = ""
   if args.division != None:
     division = f"-{args.division}"
 
-  data_as_dataset = args.data_as_dataset
+  if zpool_ensure_import_if_importable(vmname):
+    Log_info(f"zpool `{vmname}` is imported.")
+  else:
+    error_message = f"main zpool `{vmname}` is not importable."
+    Log_error(error_message)
+    raise BaseException(error_message)
+  mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/fsroot", f"{vmroot}")
 
-  exec_or(f"zpool import {vmname} -f -R {vmroot} -N", error_message=f"Could not mount main pool for '{vmname}'")
+  data_pool = f"{vmname}-data"
 
-  legacy_mount_zfs(f"{vmname}/fsroot", f"{vmroot}", allow_failure=True)
-  legacy_mount_zfs(f"{vmname}/etc", f"{vmroot}/etc", allow_failure=True)
-  legacy_mount_zfs(f"{vmname}/nix", f"{vmroot}/nix", allow_failure=True)
-  legacy_mount_zfs(f"{vmname}/data", f"{vmroot}/data", allow_failure=True)
-  exec(f"zfs mount {vmname}/data")
-  (f"zpool import {vmname}-data -f -R /var/vmm/{vmname}")
-  legacy_mount_zfs(f"{vmname}-data", f"{vmroot}/data")
-  mount_zfs(f"{vmname}/data")
-  do_mount(f"{partition_prefixsion}-boot" f"{vmroot}/boot")
+  Log_info(f"checking if data dataset of `{data_pool}` already exists...")
+  if does_zfs_dataset_exist(data_pool):
+    mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/data", f"{vmroot}/data")
+  else:
+    Log_info(f"data dataset of `{data_pool}` does not exists.")
+    Log_info(f"checking if data zpool `{data_pool}` is imported...")
+    if zpool_ensure_import_if_importable(data_pool):
+      Log_info(f"zpool `{data_pool}` is imported.")
+    else:
+      error_message = f"data zpool `{data_pool}` is not importable."
+      Log_error(error_message)
+      raise BaseException(error_message)
   
-  bind(f"mount -o bind /var/vmm/{vmname}/data/home/ /var/vmm/{vmname}/home/")
-  exec(f"mount -o bind /var/vmm/{vmname}/data/root/ /var/vmm/{vmname}/root/")
+  mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/etc", f"{vmroot}/etc")
+  mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/nix", f"{vmroot}/nix")
+
+  boot_partition = f"{partition_prefix}-boot"
+  classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot", f"{boot_partition}")
+  bind_mount(f"{vmroot}/data/root", f"{vmroot}/root")
+  bind_mount(f"{vmroot}/data/home", f"{vmroot}/home")
   mount_additional_binds(args.additional_binds)
 
 def unmount(args):
-  guard_vm_running(vmname)
   Log_info(f"unmounting host '{vmname}'...")
   exec(f"umount -R /var/vmm/{vmname}")
-  exec(f"zpool export {vmname}")
+  # chronological order for zpool export required
   exec(f"zpool export {vmname}-data")
+  exec(f"zpool export {vmname}")
 
 def resize(args):
-  guard_vm_running(vmname)
   blockdev = f"/dev/zvol/{args.zvol_parent_path}/"
   raise NotImplementedError
 
 def install(args):
-  guard_vm_running(vmname)
   root = args.path
   vmorg = args.vmorg
   if root == None:
@@ -544,7 +602,6 @@ def install(args):
 
 
 def enter(args):
-  guard_vm_running(vmname)
   if args.path != None:
     exec(f"nixos-enter --root {args.path}")
   else:
@@ -566,6 +623,17 @@ vmname = args.vmname
 vmroot = f"{mount_parent}/{vmname}"
 verbose = args.verbose
 silent = args.silent
-Log_info("parsing args...")
-args.func(args)
+returncode, formatted_output, formatted_response, formatted_error = exec("whoami")
+try:
+  guard_vm_running(vmname)
+  if formatted_output[0] != "root":
+    error_message = "You must be root!"
+    Log_error(error_message)
+    raise BaseException(error_message)
+  args.func(args)
+except BaseException as exception:
+  error_message = str(traceback.format_exc()) + "\n" + str(exception)
+  Log_error(error_message)
+Log_info("vmm finished!")
+# the sleep is necessary so the debug logger gets flushed properly at and of script
 time.sleep(1)
