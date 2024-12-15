@@ -51,15 +51,18 @@ size_parser.add_argument("--main_disk_size", help="including a unit (10GiB), 150
 mountpoint_parser = argparse.ArgumentParser(add_help=False)
 mountpoint_parser.add_argument("--additional_binds", type=str, default=None, help="additional binds that should be mounted. Paths given are relative to the host's root. Example: /new/mountpoint:/existing/path,/new/mountpoint2:/existing/path2")
 
+divison_parser = argparse.ArgumentParser(parents=[mountpoint_parser], add_help=False)
+divison_parser.add_argument("--division", type=str, help="the suffix of a mirrored pool we are mounting (for a physical host)")
+
 zvol_parser = argparse.ArgumentParser(add_help=False)
 zvol_parser.add_argument("--zvol_parent_path", default=K44_VMM_ZVOL_PARENT_PATH, help="the zfs parent path under which to create the block devices")
 
 # Add subparsers
 create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser, mountpoint_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
-mount_parser = subparser.add_parser('mount', parents=[shared_parser, mountpoint_parser], help='mount an already existing virtual machine.')
+mount_parser = subparser.add_parser('mount', parents=[shared_parser, divison_parser], help='mount an already existing virtual machine.')
 unmount_parser = subparser.add_parser('unmount', parents=[shared_parser], help='unmount an already existing virtual machine.')
 resize_parser = subparser.add_parser('resize', parents=[shared_parser, zvol_parser, size_parser], help='resize an already existing virtual machine.')
-install_parser = subparser.add_parser('install', parents=[shared_parser, external_parser], help='install an already existing virtual machine.')
+install_parser = subparser.add_parser('install', parents=[shared_parser, external_parser, divison_parser], help='install an already existing virtual machine.')
 enter_parser = subparser.add_parser('enter', parents=[external_parser], help='enter an already existing virtual machine.')
 
 #Add arguments fo subparsers
@@ -67,9 +70,8 @@ create_parser.add_argument("--data_disk_only", help="wether to ONLY create a dat
 create_parser.add_argument("--no_data_disk", help="wether to NOT create a data disk.")
 create_parser.add_argument("--data_as_dataset", help="whether data is just a dataset and not a whole (possibly virtual) disk")
 
-mount_parser.add_argument("--division", type=str, help="the suffix of a mirrored pool we are mounting (for a physical host)")
-
 install_parser.add_argument("--vmorg", required=True, type=str, help="the organisation under which the vm shall be installed")
+install_parser.add_argument("--do_not_unmount_afterwards", default=False, action='store_true', help="if this flag is set, vm will not be unmounted after install.")
 
 enter_parser.add_argument("vmname", type=str, help="the name of the vm")
 
@@ -227,6 +229,7 @@ def is_bind_mounted_as(pointed, pointing):
     pointer_stripped = re.sub(regexp_pattern, '', pointer)
     returncode, formatted_output, formatted_response, formatted_error = exec(f"findmnt --noheadings --output source,target {pointer_stripped} --json")
     mount_json_string = ""
+    #alexTODO: some bug here when mount called
     for line in formatted_output:
       mount_json_string = mount_json_string + line
     mounts_json = json.loads(mount_json_string)
@@ -579,10 +582,16 @@ def unmount(args):
   exec(f"zpool export {vmname}")
 
 def resize(args):
+  #alexTODO: is it mounted? no required
+  #unmount? yes
   blockdev = f"/dev/zvol/{args.zvol_parent_path}/"
   raise NotImplementedError
 
 def install(args):
+  Log_info("start mounting...")
+  mount(args)
+  Log_info("mounting finished. installing...")
+  #alexTODO: make snapshot vmm-auto-timestamp (maximum 4)
   root = args.path
   vmorg = args.vmorg
   if root == None:
@@ -600,7 +609,32 @@ def install(args):
     install_error_string = install_error_string + line
     if f"error: attribute '{vmname}' missing" in line:
       Log_error(line + f"\nMaybe the NIX_PATH is not set properly? e.g. '/#/zion/k44/knet' should probably be not in there and you have to remove it!\n\nAlso make sure you have added `{vmname}` to /#/zion/k44/feu/common/organisation.nix -> hosts!")
+  if not args.do_not_unmount_afterwards:
+    unmount(args)
+  #alexTODO: make snapshot vmm-auto-timestamp
 
+#alexTODO: new function clear delete all vmm-auto-snapshots
+
+#alexTODO: start function
+# check if already running
+# if not running: 
+#   check if root is mounted
+#     then unmount
+#     if unmount disk error: exit
+#     if unmount disk ok: start vm
+#   else root not mounted: start vm
+
+#alexTODO: snapshot function
+
+#alexTODO: reverse-to-last-snapshot-before-install
+
+#alexTODO: reverse-to-last-snapshot-after-install
+
+
+
+#alexTODO: stop function with "shutdown?yes"
+
+#alexTODO: kill function
 
 def enter(args):
   if args.path != None:
