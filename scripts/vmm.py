@@ -15,11 +15,6 @@ if debug:
   Deb_set_printCallstack(False)
 
 try:
-  vms_path = os.environ(['K44_VMM_VM_ROOT'])
-except Exception as e:
-  Log_warn(f"{e} - we will continue with `eva/vms`")
-  vms_path = "eva/vms"
-try:
   mount_parent = os.environ(['K44_VMM_MOUNT_ROOT'])
 except Exception as e:
   Log_warn(f"{e} - we will continue with `/var/vmm`")
@@ -67,7 +62,7 @@ create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_pars
 mount_parser = subparser.add_parser('mount', parents=[shared_parser, divison_parser], help='mount an already existing virtual machine.')
 unmount_parser = subparser.add_parser('unmount', parents=[shared_parser], help='unmount an already existing virtual machine.')
 resize_parser = subparser.add_parser('resize', parents=[shared_parser, zvol_parser, size_parser], help='resize an already existing virtual machine.')
-install_parser = subparser.add_parser('install', parents=[shared_parser, external_parser, divison_parser], help='install an already existing virtual machine.')
+install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_parser, external_parser, divison_parser], help='install an already existing virtual machine.')
 enter_parser = subparser.add_parser('enter', parents=[external_parser], help='enter an already existing virtual machine.')
 kill_parser = subparser.add_parser('kill', parents=[shared_parser], help='kill a running virtual machine (virsh destroy vmname).')
 
@@ -277,7 +272,10 @@ def mount_additional_binds(list):
 def exec_or(command, error_message):
   returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(command)
   if not returncode:
-    throw(error_message)
+    concatenated_message = ""
+    for line in formatted_output:
+      concatenated_message = concatenated_message + line
+      throw(concatenated_message + "\n" + error_message)
   else:
     return returncode, formatted_output, formatted_response, formatted_error
 
@@ -629,6 +627,9 @@ def resize(args):
 
 def install(args):
   guard_vm_running(vmname)
+  if args.zvol_parent_path == None:
+    Log_error("ERROR: the following arguments are required: --zvol_parent_path")
+    return
   Log_info("start mounting...")
   mount(args)
   Log_info("mounting finished. installing...")
@@ -655,13 +656,22 @@ def install(args):
   make_snapshot(vmname, "after_install")
 
 def make_snapshot(vmname, snapshot_name = ""):
-  now = Get_timestamp()
+  now = Get_timestamp_for_filenames()
   if snapshot_name != "":
     snapshot_name = "_" + snapshot_name
-  snapshot_name = f"vm-{vmname}-data_autotimestamp{snapshot_name}@{now}"
-  snapshot_path = os.path.join({vms_path}, )
-  exec(f"zfs snapshot {snapshot_path}")
+  vm_data = f"vm-{vmname}-data"
+  vm_vda = f"vm-{vmname}-vda"
+  data_snapshot_name = f"{vm_data}@autotimestamp{snapshot_name}_{now}"
+  vda_snapshot_name = f"{vm_vda}@autotimestamp{snapshot_name}_{now}"
 
+  data_snapshot_path = os.path.join(args.zvol_parent_path, data_snapshot_name)
+  vda_snapshot_path = os.path.join(args.zvol_parent_path, vda_snapshot_name)
+  Log_info(f"creating snapshot `{data_snapshot_path}`...")
+  exec_or(f"zfs snapshot {data_snapshot_path}", f"Failed to save snapshot to {data_snapshot_path}.")
+  Log_info(f"snapshot `{data_snapshot_path}` created.")
+  Log_info(f"creating snapshot `{vda_snapshot_path}`...")
+  exec_or(f"zfs snapshot {vda_snapshot_path}", f"Failed to save snapshot to {vda_snapshot_path}.")
+  Log_info(f"snapshot `{vda_snapshot_path}` created.")
 
 #alexTODO: new function clear delete all vmm-auto-snapshots
 
