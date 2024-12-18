@@ -645,7 +645,7 @@ def install(args):
   vmorg = args.vmorg
   if root == None:
     root = f"{mount_parent}/{vmname}"
-  returncode, install_output, install_result, install_error = exec(f"cd {K44_VMM_ZION_PATH}; nixos-install --flake ./{vmorg}/hosts/{vmname}#{vmname} --root {root} --impure --no-root-passwd")
+  returncode, install_output, install_result, install_error = exec_or(f"cd {K44_VMM_ZION_PATH}; nixos-install --flake ./{vmorg}/hosts/{vmname}#{vmname} --root {root} --impure --no-root-passwd", "nixos-install failed.")
   if not isinstance(install_result, list):
     install_result = [install_result]
   install_result_string = ""
