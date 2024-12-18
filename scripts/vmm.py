@@ -40,6 +40,16 @@ subparser = parser.add_subparsers(required=True)
 shared_parser = argparse.ArgumentParser(add_help=False)
 shared_parser.add_argument("vmname", type=str, help="the name of the vm")
 
+vmorg_parser = argparse.ArgumentParser(add_help=False)
+vmorg_parser.add_argument("--vmorg", required=True, type=str, help="the organisation under which the vm shall be installed")
+
+required_argument_parsers_for_creation_parser = argparse.ArgumentParser(add_help=False)
+required_argument_parsers_for_creation_parser.add_argument("--data_disk_only", help="wether to ONLY create a data disk.")
+required_argument_parsers_for_creation_parser.add_argument("--data_as_dataset", help="whether data is just a dataset and not a whole (possibly virtual) disk")
+required_argument_parsers_for_creation_parser.add_argument("--no_data_disk", help="wether to NOT create a data disk.")
+
+required_argument_parsers_for_install_parser = argparse.ArgumentParser(add_help=False)
+required_argument_parsers_for_install_parser.add_argument("--do_not_unmount_afterwards", default=False, action='store_true', help="if this flag is set, vm will not be unmounted after install.")
 
 external_parser = argparse.ArgumentParser(add_help=False)
 external_parser.add_argument("--path", type=str, help="path to where the nixos installation is mounted")
@@ -58,21 +68,17 @@ zvol_parser = argparse.ArgumentParser(add_help=False)
 zvol_parser.add_argument("--zvol_parent_path", default=K44_VMM_ZVOL_PARENT_PATH, help="the zfs parent path under which to create the block devices")
 
 # Add subparsers
-create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser, mountpoint_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
+create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser, mountpoint_parser, required_argument_parsers_for_creation_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
 mount_parser = subparser.add_parser('mount', parents=[shared_parser, divison_parser], help='mount an already existing virtual machine.')
 unmount_parser = subparser.add_parser('unmount', parents=[shared_parser], help='unmount an already existing virtual machine.')
 resize_parser = subparser.add_parser('resize', parents=[shared_parser, zvol_parser, size_parser], help='resize an already existing virtual machine.')
-install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_parser, external_parser, divison_parser], help='install an already existing virtual machine.')
+install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_parser, external_parser, divison_parser, vmorg_parser, required_argument_parsers_for_install_parser], help='install an already existing virtual machine.')
 enter_parser = subparser.add_parser('enter', parents=[external_parser], help='enter an already existing virtual machine.')
 kill_parser = subparser.add_parser('kill', parents=[shared_parser], help='kill a running virtual machine (virsh destroy vmname).')
+setup_vm_parser = subparser.add_parser('setup_vm', parents=[shared_parser, zvol_parser, size_parser,  external_parser, divison_parser, vmorg_parser, required_argument_parsers_for_creation_parser, required_argument_parsers_for_install_parser], help='sets up a vm (create and install)')
 
-#Add arguments fo subparsers
-create_parser.add_argument("--data_disk_only", help="wether to ONLY create a data disk.")
-create_parser.add_argument("--no_data_disk", help="wether to NOT create a data disk.")
-create_parser.add_argument("--data_as_dataset", help="whether data is just a dataset and not a whole (possibly virtual) disk")
+#Add arguments to subparsers
 
-install_parser.add_argument("--vmorg", required=True, type=str, help="the organisation under which the vm shall be installed")
-install_parser.add_argument("--do_not_unmount_afterwards", default=False, action='store_true', help="if this flag is set, vm will not be unmounted after install.")
 
 enter_parser.add_argument("vmname", type=str, help="the name of the vm")
 
@@ -597,13 +603,11 @@ def unmount(args):
   returncode, formatted_output, formatted_response, formatted_error = exec(f"umount -R /var/vmm/{vmname}/boot")
   if len(formatted_output) > 0 and "not mounted" in formatted_output[0]:
       error_message = formatted_output[0]
-      Log_error(error_message)
-      raise BaseException(error_message)
+      Log_warn(error_message)
   returncode, formatted_output, formatted_response, formatted_error = exec(f"umount -R /var/vmm/{vmname}")
   if len(formatted_output) > 0 and "not mounted" in formatted_output[0]:
       error_message = formatted_output[0]
-      Log_error(error_message)
-      raise BaseException(error_message)
+      Log_warn(error_message)
   returncode, formatted_output, formatted_response, formatted_error = exec(f"zpool export {vmname}-data")
   if len(formatted_output) > 0 and ("unmount failed" in formatted_output[0] or "pool is busy" in formatted_output[0]):
       error_message = formatted_output[0]
@@ -716,6 +720,12 @@ def enter(args):
   else:
     exec(f"nixos-enter --root {vmroot}")
 
+def setup_vm(args):
+  guard_vm_running(vmname)
+  create(args)
+  install(args)
+
+
 create_parser.set_defaults(func=create)
 mount_parser.set_defaults(func=mount)
 unmount_parser.set_defaults(func=unmount)
@@ -723,6 +733,7 @@ resize_parser.set_defaults(func=resize)
 install_parser.set_defaults(func=install)
 enter_parser.set_defaults(func=enter)
 kill_parser.set_defaults(func=kill)
+setup_vm_parser.set_defaults(func=setup_vm)
 
 
 
