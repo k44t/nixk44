@@ -659,7 +659,9 @@ def install(args):
   for line in install_error:
     install_error_string = install_error_string + line
     if f"error: attribute '{vmname}' missing" in line:
-      Log_error(line + f"\nMaybe the NIX_PATH is not set properly? e.g. '/#/zion/k44/knet' should probably be not in there and you have to remove it!\n\nAlso make sure you have added `{vmname}` to /#/zion/k44/feu/common/organisation.nix -> hosts!")
+      error_message = line + f"\nMaybe the NIX_PATH is not set properly? e.g. '/#/zion/k44/knet' should probably be not in there and you have to remove it!\n\nAlso make sure you have added `{vmname}` to /#/zion/k44/feu/common/organisation.nix -> hosts!"
+      Log_error(error_message)
+      raise BaseException(error_message)
   if not args.do_not_unmount_afterwards:
     unmount(args)
   make_snapshot(vmname, "after_install")
@@ -732,23 +734,23 @@ def setup_wireguard():
   keys_path = os.path.join(data_pool_location, "keys")
   wireguard_path = os.path.join(keys_path, "wireguard")
   feu_wireguard_path =  os.path.join(wireguard_path, "feu")
-  mkdirs(feu_wireguard_path)
+  mkdirs("", [keys_path, wireguard_path, feu_wireguard_path])
   chmods_replace("", [keys_path], [555])
   chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
   privatekey_path =  os.path.join(wireguard_path, "privatekey")
   publickey_path =  os.path.join(wireguard_path, "publickey")
   if not os.path.isfile(privatekey_path):
-    exec_or(f"wg genkey | tee {privatekey_path} | wg pubkey > {publickey_path}")
+    exec_or(f"wg genkey | tee {privatekey_path} | wg pubkey > {publickey_path}", "failed to generade wireguard private and public key")
   #choosing systemd-network group for key files only works because the userid of systemd-network on eva is (should be) the same as on the newly created server
-  exec_or(f"chgrp -R systemd-network {wireguard_path}")
+  exec_or(f"chgrp -R systemd-network {wireguard_path}", "failed to change group to systemd-network")
   g_psk_path = os.path.join(feu_wireguard_path, "_g.psk")
-  exec_or(f"wg genpsk > {g_psk_path}")
-  returncode, g_presharedkey, formatted_response, formatted_error = exec_or(f"cat {g_psk_path}")
-  returncode, publickey, formatted_response, formatted_error = exec_or(f"cat {publickey_path}")
+  exec_or(f"wg genpsk > {g_psk_path}", "failed to generate preshared key for _g")
+  returncode, g_presharedkey, formatted_response, formatted_error = exec_or(f"cat {g_psk_path}", "could not open preshared keyfile of _g")
+  returncode, publickey, formatted_response, formatted_error = exec_or(f"cat {publickey_path}", "could not open public key")
   chmods_replace("", [keys_path], [555])
   chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
-  exec_or(f"chgrp -R systemd-network {wireguard_path}")
-  return_string = f"_g Preshared Key:\{g_presharedkey}\nPublickey:\n{publickey}"
+  exec_or(f"chgrp -R systemd-network {wireguard_path}", "failed to change group to systemd-network")
+  return_string = f"_g Preshared Key:\n{g_presharedkey[0]}\nPublickey:\n{publickey[0]}"
   return return_string
 
 
@@ -757,9 +759,9 @@ def setup_vm(args):
   create(args)
   install(args)
   mount(args)
-  start(args)
   wireguard_key_string = setup_wireguard()
-  Log_warn(f"Remember to set the keys in `wireguard/feu/{vmname.conf}`:\n{wireguard_key_string}")
+  Log_warn(f"Remember to set the keys in `wireguard/feu/{vmname}.conf`:\n{wireguard_key_string}")
+  start(args)
 
 
 create_parser.set_defaults(func=create)
