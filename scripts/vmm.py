@@ -538,9 +538,9 @@ def guard_vm_running(vmname):
     if yes(f"VM `{vmname}` is currently up and running. Do you want to shut it down?"):
       exec(f"virsh shutdown {vmname}")
       time.sleep(10)
-      if not is_vm_running(vmname):
+      if is_vm_running(vmname):
         if yes(f"VM `{vmname}` is still running, do you want to kill it? (you can wait some more before you hit enter)"):
-          exec(f"virsh destroy {vmname}")
+          exec_or(f"virsh destroy {vmname}", f"failed to kill vm {vmname}")
         else:
           throw(f"exiting...")
       Log_info(f"have shut down vm '{vmname}'")
@@ -695,7 +695,9 @@ def make_snapshot(vmname, snapshot_name = ""):
 #     if unmount disk ok: start vm
 #   else root not mounted: start vm
 def start(args):
-  returncode, install_output, install_result, install_error = exec(f"virsh start {vmname}")
+  Log_info(f"starting vm `{vmname}`...")
+  returncode, install_output, install_result, install_error = exec_or(f"virsh start {vmname}", f"failed to start vm `{vmname}`. Did you just setup a new vm? then you probably have to rebuild eva first!")
+  Log_info(f"vm `{vmname}` started.")
 
 
 
@@ -760,8 +762,9 @@ def setup_vm(args):
   install(args)
   mount(args)
   wireguard_key_string = setup_wireguard()
-  Log_warn(f"Remember to set the keys in `wireguard/feu/{vmname}.conf`:\n{wireguard_key_string}")
+  unmount(args)
   start(args)
+  Log_warn(f"Remember to set the keys in `wireguard/feu/{vmname}.conf`:\n{wireguard_key_string}")
 
 
 create_parser.set_defaults(func=create)
