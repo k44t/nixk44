@@ -746,7 +746,8 @@ def setup_wireguard():
   #choosing systemd-network group for key files only works because the userid of systemd-network on eva is (should be) the same as on the newly created server
   exec_or(f"chgrp -R systemd-network {wireguard_path}", "failed to change group to systemd-network")
   g_psk_path = os.path.join(feu_wireguard_path, "_g.psk")
-  exec_or(f"wg genpsk > {g_psk_path}", "failed to generate preshared key for _g")
+  if not os.path.isfile(g_psk_path):
+    exec_or(f"wg genpsk > {g_psk_path}", "failed to generate preshared key for _g")
   returncode, g_presharedkey, formatted_response, formatted_error = exec_or(f"cat {g_psk_path}", "could not open preshared keyfile of _g")
   returncode, publickey, formatted_response, formatted_error = exec_or(f"cat {publickey_path}", "could not open public key")
   chmods_replace("", [keys_path], [555])
