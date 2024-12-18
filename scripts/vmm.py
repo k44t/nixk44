@@ -10,9 +10,12 @@ import argparse
 
 from utils_python.utils_python_package.src.Apoeschllogging import *
 
+# Settings
 debug = True
 if debug:
   Deb_set_printCallstack(False)
+
+data_tag = "data"
 
 try:
   mount_parent = os.environ(['K44_VMM_MOUNT_ROOT'])
@@ -469,7 +472,6 @@ def create(args):
   if create_data_disk:
     Log_info("creating data disk (if necessary)")
     # create data disk
-    data_tag = "data"
     data_pool = f"{vmname}-{data_tag}"
     zvol_path = f"{args.zvol_parent_path}/vm-{data_pool}"
     
@@ -574,9 +576,10 @@ def mount(args):
 
   data_pool = f"{vmname}-data"
 
+  data_pool_location = f"{vmroot}/{data_tag}"
   Log_info(f"checking if data dataset of `{data_pool}` already exists...")
   if does_zfs_dataset_exist(data_pool):
-    mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/data", f"{vmroot}/data")
+    mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/data", f"{data_pool_location}")
   else:
     Log_info(f"data dataset of `{data_pool}` does not exists.")
     Log_info(f"checking if data zpool `{data_pool}` is imported...")
@@ -592,8 +595,8 @@ def mount(args):
 
   boot_partition = f"{partition_prefix}-boot"
   classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot", f"{boot_partition}")
-  bind_mount(f"{vmroot}/data/root", f"{vmroot}/root")
-  bind_mount(f"{vmroot}/data/home", f"{vmroot}/home")
+  bind_mount(f"{data_pool_location}/root", f"{vmroot}/root")
+  bind_mount(f"{data_pool_location}/home", f"{vmroot}/home")
   mount_additional_binds(args.additional_binds)
 
 def unmount(args):
@@ -687,6 +690,8 @@ def make_snapshot(vmname, snapshot_name = ""):
 #     if unmount disk error: exit
 #     if unmount disk ok: start vm
 #   else root not mounted: start vm
+def start(args):
+  returncode, install_output, install_result, install_error = exec(f"virsh start {vmname}")
 
 
 
@@ -720,10 +725,39 @@ def enter(args):
   else:
     exec(f"nixos-enter --root {vmroot}")
 
+def setup_wireguard():
+  data_pool_location = f"{vmroot}/{data_tag}"
+  keys_path = os.path.join(data_pool_location, "keys")
+  wireguard_path = os.path.join(keys_path, "wireguard")
+  feu_wireguard_path =  os.path.join(wireguard_path, "feu")
+  mkdirs(feu_wireguard_path)
+  chmods_replace("", [keys_path], [555])
+  chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
+  privatekey_path =  os.path.join(wireguard_path, "privatekey")
+  publickey_path =  os.path.join(wireguard_path, "publickey")
+  if not os.path.isfile(privatekey_path):
+    exec_or(f"wg genkey | tee {privatekey_path} | wg pubkey > {publickey_path}")
+  #choosing systemd-network group for key files only works because the userid of systemd-network on eva is (should be) the same as on the newly created server
+  exec_or(f"chgrp -R systemd-network {wireguard_path}")
+  g_psk_path = os.path.join(feu_wireguard_path, "_g.psk")
+  exec_or(f"wg genpsk > {g_psk_path}")
+  returncode, g_presharedkey, formatted_response, formatted_error = exec_or(f"cat {g_psk_path}")
+  returncode, publickey, formatted_response, formatted_error = exec_or(f"cat {publickey_path}")
+  chmods_replace("", [keys_path], [555])
+  chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
+  exec_or(f"chgrp -R systemd-network {wireguard_path}")
+  return_string = f"_g Preshared Key:\{g_presharedkey}\nPublickey:\n{publickey}"
+  return return_string
+
+
 def setup_vm(args):
   guard_vm_running(vmname)
   create(args)
   install(args)
+  mount(args)
+  start(args)
+  wireguard_key_string = setup_wireguard()
+  Log_warn(f"Remember to set the keys in `wireguard/feu/{vmname.conf}`:\n{wireguard_key_string}")
 
 
 create_parser.set_defaults(func=create)
