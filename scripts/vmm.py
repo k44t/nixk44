@@ -652,7 +652,9 @@ def install(args):
   for line in install_result:
     install_result_string = install_result_string + line
     if len(install_result) == 1 and "configuration file" in line and "doesn't exist" in line:
-      Log_error(line + f"\nMaybe you did not checkin the nix files into git? In order for install to work, the .nix file and all of the config files for your new server `{vmname}` must exist in `/#/zion/k44/feu/hosts/{vmname}` and those files must be commited to git, so that nixos-install can find them.")
+      error_message = line + f"\nMaybe you did not checkin the nix files into git? In order for install to work, the .nix file and all of the config files for your new server `{vmname}` must exist in `/#/zion/k44/feu/hosts/{vmname}` and those files must be commited to git, so that nixos-install can find them."
+      Log_error(error_message)
+      raise BaseException(error_message)
   install_error_string = ""
   for line in install_error:
     install_error_string = install_error_string + line
