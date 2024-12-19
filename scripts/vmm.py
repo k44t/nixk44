@@ -736,9 +736,10 @@ def setup_wireguard():
   keys_path = os.path.join(data_pool_location, "keys")
   wireguard_path = os.path.join(keys_path, "wireguard")
   feu_wireguard_path =  os.path.join(wireguard_path, "feu")
-  mkdirs("", [keys_path, wireguard_path, feu_wireguard_path])
+  knet_wireguard_path =  os.path.join(wireguard_path, "knet")
+  mkdirs("", [keys_path, wireguard_path, feu_wireguard_path, knet_wireguard_path])
   chmods_replace("", [keys_path], [555])
-  chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
+  chmods_replace("", [wireguard_path, feu_wireguard_path, knet_wireguard_path], [550])
   privatekey_path =  os.path.join(wireguard_path, "privatekey")
   publickey_path =  os.path.join(wireguard_path, "publickey")
   if not os.path.isfile(privatekey_path):
@@ -749,11 +750,15 @@ def setup_wireguard():
   if not os.path.isfile(g_psk_path):
     exec_or(f"wg genpsk > {g_psk_path}", "failed to generate preshared key for _g")
   returncode, g_presharedkey, formatted_response, formatted_error = exec_or(f"cat {g_psk_path}", "could not open preshared keyfile of _g")
+  k_psk_path = os.path.join(knet_wireguard_path, "_k.psk")
+  if not os.path.isfile(k_psk_path):
+    exec_or(f"wg genpsk > {k_psk_path}", "failed to generate preshared key for _k")
+  returncode, k_presharedkey, formatted_response, formatted_error = exec_or(f"cat {k_psk_path}", "could not open preshared keyfile of _k")
   returncode, publickey, formatted_response, formatted_error = exec_or(f"cat {publickey_path}", "could not open public key")
   chmods_replace("", [keys_path], [555])
   chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
   exec_or(f"chgrp -R systemd-network {wireguard_path}", "failed to change group to systemd-network")
-  return_string = f"_g Preshared Key:\n{g_presharedkey[0]}\nPublickey:\n{publickey[0]}"
+  return_string = f"_g Preshared Key:\n{g_presharedkey[0]}\n_k Preshared Key:\n{k_presharedkey[0]}\nPublickey:\n{publickey[0]}"
   return return_string
 
 
