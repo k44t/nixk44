@@ -79,11 +79,13 @@ install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_pa
 enter_parser = subparser.add_parser('enter', parents=[external_parser], help='enter an already existing virtual machine.')
 kill_parser = subparser.add_parser('kill', parents=[shared_parser], help='kill a running virtual machine (virsh destroy vmname).')
 setup_vm_parser = subparser.add_parser('setup_vm', parents=[shared_parser, zvol_parser, size_parser,  external_parser, divison_parser, vmorg_parser, required_argument_parsers_for_creation_parser, required_argument_parsers_for_install_parser], help='sets up a vm (create and install)')
-
+make_snapshot_parser = subparser.add_parser('snapshot', parents=[shared_parser, zvol_parser], help='snapshots a vm')
 #Add arguments to subparsers
 
 
 enter_parser.add_argument("vmname", type=str, help="the name of the vm")
+
+make_snapshot_parser.add_argument("--snapshot_name", type=str, default="", help="the name of the snapshot")
 
 def is_partitioned(blockdev):
   # -s means script
@@ -640,7 +642,7 @@ def install(args):
   Log_info("start mounting...")
   mount(args)
   Log_info("mounting finished. installing...")
-  make_snapshot(vmname, "before_install")
+  create_snapshot(vmname, "auto_snapshot_before_install")
   root = args.path
   vmorg = args.vmorg
   if root == None:
@@ -664,16 +666,19 @@ def install(args):
       raise BaseException(error_message)
   if not args.do_not_unmount_afterwards:
     unmount(args)
-  make_snapshot(vmname, "after_install")
+  create_snapshot(vmname, "auto_snapshot_after_install")
 
-def make_snapshot(vmname, snapshot_name = ""):
+def make_snapshot(args):
+  create_snapshot(args.vmname, args.snapshot_name)
+
+def create_snapshot(vmname, snapshot_name = ""):
   now = Get_timestamp_for_filenames()
   if snapshot_name != "":
     snapshot_name = "_" + snapshot_name
   vm_data = f"vm-{vmname}-data"
   vm_vda = f"vm-{vmname}-vda"
-  data_snapshot_name = f"{vm_data}@autotimestamp{snapshot_name}_{now}"
-  vda_snapshot_name = f"{vm_vda}@autotimestamp{snapshot_name}_{now}"
+  data_snapshot_name = f"{vm_data}@{now}{snapshot_name}"
+  vda_snapshot_name = f"{vm_vda}@{now}{snapshot_name}"
 
   data_snapshot_path = os.path.join(args.zvol_parent_path, data_snapshot_name)
   vda_snapshot_path = os.path.join(args.zvol_parent_path, vda_snapshot_name)
@@ -781,7 +786,7 @@ install_parser.set_defaults(func=install)
 enter_parser.set_defaults(func=enter)
 kill_parser.set_defaults(func=kill)
 setup_vm_parser.set_defaults(func=setup_vm)
-
+make_snapshot_parser.set_defaults(func=make_snapshot)
 
 
 
