@@ -5,6 +5,7 @@ import time
 import subprocess
 import json
 from natsort import natsorted
+from datetime import datetime, timedelta
 
 import argparse
 
@@ -13,7 +14,7 @@ from utils_python.utils_python_package.src.Apoeschllogging import *
 # Settings
 debug = True
 if debug:
-  Deb_set_printCallstack(False)
+  Deb_set_printCallstack(True)
 
 data_tag = "data"
 
@@ -79,6 +80,7 @@ install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_pa
 enter_parser = subparser.add_parser('enter', parents=[external_parser], help='enter an already existing virtual machine.')
 kill_parser = subparser.add_parser('kill', parents=[shared_parser], help='kill a running virtual machine (virsh destroy vmname).')
 setup_vm_parser = subparser.add_parser('setup_vm', parents=[shared_parser, zvol_parser, size_parser,  external_parser, divison_parser, vmorg_parser, required_argument_parsers_for_creation_parser, required_argument_parsers_for_install_parser], help='sets up a vm (create and install)')
+remove_vm_parser = subparser.add_parser('remove_vm', parents=[shared_parser], help='completely removes the vm from the system')
 make_snapshot_parser = subparser.add_parser('snapshot', parents=[shared_parser, zvol_parser], help='snapshots a vm')
 #Add arguments to subparsers
 
@@ -103,7 +105,7 @@ def exec_for_bool(command):
 
 # we are overriding python's internal exec, which would execute python code dynamically, because we don't need nor like it
 def myexec(command):
-  Log_info(f"running command: `{command}`")
+  Log_info(f"Executing command: {command}")
   if verbose:
     process = subprocess.Popen(command, 
                             shell=True)
@@ -119,15 +121,46 @@ def myexec(command):
   os.set_blocking(process.stdout.fileno(), False)
   os.set_blocking(process.stderr.fileno(), False)
   try:
+    timestamp_last_stdout_readline_start = datetime.now()
+    timestamp_last_stderr_readline_start = datetime.now()
+    timestamp_last_stdout_readline = timestamp_last_stdout_readline_start
+    timestamp_last_stderr_readline = timestamp_last_stderr_readline_start
     while process.poll() is None:
       if process.stdout != None:
         response_line = process.stdout.readline().decode("utf-8").replace("\n", "")
         if not silent and response_line != "":
-          Log_no_header(response_line)
+          Log_no_header("stdout: " + response_line)
+        if response_line != "":
+          timestamp_last_stdout_readline_start = datetime.now()
+          timestamp_last_stdout_readline = timestamp_last_stdout_readline_start
+          timestamp_last_stderr_readline = datetime.now()
       if process.stderr != None:
         error_line = process.stderr.readline().decode("utf-8").replace("\n", "")
         if not silent and error_line != "":
-          Log_no_header(error_line)
+          Log_no_header("stderr: " + error_line)
+        if error_line != "":
+          timestamp_last_stderr_readline_start = datetime.now()
+          timestamp_last_stderr_readline = timestamp_last_stderr_readline_start
+          timestamp_last_stdout_readline = datetime.now()
+      if (process.stderr != None and error_line == "") and (process.stdout != None and response_line == ""):
+        timestamp_stdout_now = datetime.now()
+        timestamp_stderr_now = datetime.now()
+        if timestamp_stderr_now > (timestamp_last_stderr_readline + timedelta(seconds = 5)) and \
+          timestamp_stdout_now > (timestamp_last_stdout_readline + timedelta(seconds = 5)):
+          no_output_since = min(timestamp_stderr_now - timestamp_last_stderr_readline_start, timestamp_stdout_now - timestamp_last_stdout_readline_start)
+          Log_warn(f"Command `{command}` had no stderr and stdout output since {no_output_since}.")
+          timestamp_last_stdout_readline = timestamp_stdout_now
+          timestamp_last_stderr_readline = timestamp_stderr_now
+      elif (process.stderr != None and error_line == ""):
+        timestamp_stderr_now = datetime.now()
+        if timestamp_stderr_now > (timestamp_last_stderr_readline + timedelta(seconds = 5)):
+          Log_warn(f"Command `{command}` had no stderr output since {timestamp_stderr_now - timestamp_last_stderr_readline_start}.")
+          timestamp_last_stderr_readline = timestamp_stderr_now
+      elif (process.stdout != None and response_line == ""):
+        timestamp_stdout_now = datetime.now()
+        if timestamp_stdout_now > (timestamp_last_stdout_readline + timedelta(seconds = 5)):
+          Log_warn(f"Command `{command}` had no stdout output since {timestamp_stdout_now - timestamp_last_stdout_readline_start}.")
+          timestamp_last_stdout_readline = timestamp_stdout_now
       if response_line != "":
         formatted_response.append(response_line)
         formatted_output.append(response_line)
@@ -142,7 +175,7 @@ def myexec(command):
       line = line.decode("utf-8").replace("\n", "")
       if line != "":
         if not silent:
-          Log_no_header(line)
+          Log_no_header("stdout: " + line)
         formatted_response.append(line)
         formatted_output.append(line)
   except Exception as e:
@@ -153,7 +186,7 @@ def myexec(command):
       line = line.decode("utf-8").replace("\n", "")
       if line != "":
         if not silent:
-          Log_no_header(line)
+          Log_no_header("stderr: " + line)
         formatted_error.append(line)
         formatted_output.append(line)
   except Exception as e:
@@ -268,6 +301,8 @@ def is_bind_mounted_as(pointed, pointing):
 def bind_mount(pointed, pointing):
   #alexTODO: check if this works as expected
   if not is_bind_mounted_as(pointed, pointing):
+    Log_info(f"pointed: `{pointed}` is not bindmounted on pointing: `{pointing}`.")
+    Log_info(f"makedirs `{pointing}`")
     os.makedirs(pointing, exist_ok=True)
     exec_or(f"mount --bind '{pointed}' '{pointing}'", f"bind mount failed from (pointing) '{pointing}' to (pointed) '{pointed}' path.")
 
@@ -291,8 +326,8 @@ def exec_or(command, error_message):
     return returncode, formatted_output, formatted_response, formatted_error
 
 def exec_for_list(command):
-  Log_info(f"running command: `{command}`")
-  return os.popen(command).readlines()
+  returncode, formatted_output, formatted_response, formatted_error = exec(command)
+  return formatted_response
   
 def import_zpool(poolname):
   exec_or(f"zpool import -f {poolname} -R {vmroot}", f"unable to import existing zpool {vmname}. Please destroy, make unavailable or import manually to proceed.")
@@ -596,6 +631,7 @@ def mount(args):
   mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/nix", f"{vmroot}/nix")
 
   boot_partition = f"{partition_prefix}-boot"
+  mkdirs(f"{data_pool_location}", ["root", "home"])
   classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot", f"{boot_partition}")
   bind_mount(f"{data_pool_location}/root", f"{vmroot}/root")
   bind_mount(f"{data_pool_location}/home", f"{vmroot}/home")
@@ -603,16 +639,24 @@ def mount(args):
 
 def unmount(args):
   guard_vm_running(vmname)
-  Log_info(f"unmounting host '{vmname}'...")
+  Log_info(f"unmounting host `{vmname}`...")
   # chronological order for zpool export required
   returncode, formatted_output, formatted_response, formatted_error = exec(f"umount -R /var/vmm/{vmname}/boot")
   if len(formatted_output) > 0 and "not mounted" in formatted_output[0]:
       error_message = formatted_output[0]
       Log_warn(error_message)
+  if len(formatted_output) > 0 and "target is busy" in formatted_output[0]:
+      error_message = formatted_output[0] + "\n are you maybe in some folder inside the device, or do you have any files from there open?"
+      Log_error(error_message)
+      raise BaseException(error_message)
   returncode, formatted_output, formatted_response, formatted_error = exec(f"umount -R /var/vmm/{vmname}")
   if len(formatted_output) > 0 and "not mounted" in formatted_output[0]:
       error_message = formatted_output[0]
       Log_warn(error_message)
+  if len(formatted_output) > 0 and "target is busy" in formatted_output[0]:
+      error_message = formatted_output[0] + "\n are you maybe in some folder inside the device, or do you have any files from there open?"
+      Log_error(error_message)
+      raise BaseException(error_message)
   returncode, formatted_output, formatted_response, formatted_error = exec(f"zpool export {vmname}-data")
   if len(formatted_output) > 0 and ("unmount failed" in formatted_output[0] or "pool is busy" in formatted_output[0]):
       error_message = formatted_output[0]
@@ -621,6 +665,10 @@ def unmount(args):
   returncode, formatted_output, formatted_response, formatted_error = exec(f"umount -R /var/vmm/{vmname}")
   if len(formatted_output) > 0 and "not mounted" in formatted_output[0]:
       Log_warn("Error: " + formatted_output[0] + " - was not mounted, but its okay, we expected this.")
+  if len(formatted_output) > 0 and "pool or dataset busy" in formatted_output[0]:
+      error_message = formatted_output[0]
+      Log_error(error_message)
+      raise BaseException(error_message)
   returncode, formatted_output, formatted_response, formatted_error = exec(f"zpool export {vmname}")
   if len(formatted_output) > 0 and "pool or dataset busy" in formatted_output[0]:
       error_message = formatted_output[0]
@@ -701,7 +749,7 @@ def create_snapshot(vmname, snapshot_name = ""):
 #   else root not mounted: start vm
 def start(args):
   Log_info(f"starting vm `{vmname}`...")
-  returncode, install_output, install_result, install_error = exec_or(f"virsh start {vmname}", f"failed to start vm `{vmname}`. Did you just setup a new vm? then you probably have to rebuild eva first!")
+  returncode, install_output, install_result, install_error = exec_or(f"virsh start {vmname}", f"failed to start vm `{vmname}`. Did you just setup a new vm? then you probably have to rebuild eva first! And then reboot eva...")
   Log_info(f"vm `{vmname}` started.")
 
 
@@ -770,12 +818,26 @@ def setup_wireguard():
 def setup_vm(args):
   guard_vm_running(vmname)
   create(args)
+  unmount(args)
   install(args)
   mount(args)
   wireguard_key_string = setup_wireguard()
   unmount(args)
   start(args)
   Log_warn(f"Remember to set the keys in `wireguard/feu/{vmname}.conf`:\n{wireguard_key_string}")
+
+def remove_vm(args):
+  yes(f"Do you really want to remove the vm `{vmname}` from the system? (remove mounts, remove from virsh, delete disks)")
+  yes(f"Are you really sure you want to remove the vm `{vmname}` from the system?")
+  guard_vm_running(vmname)
+  unmount(args)
+  exec(f"virsh undefine --nvram {vmname} --remove-all-storage")
+  exec(f"zfs destroy -r eva/vms/vm-{vmname}-vda")
+  exec(f"zfs destroy -r eva/vms/vm-{vmname}-data")
+  exec(f"rm -rf /var/vmm/{vmname}")
+  exec(f"rm -rf /var/vmm/{vmname}-data")
+
+
 
 
 create_parser.set_defaults(func=create)
@@ -786,6 +848,7 @@ install_parser.set_defaults(func=install)
 enter_parser.set_defaults(func=enter)
 kill_parser.set_defaults(func=kill)
 setup_vm_parser.set_defaults(func=setup_vm)
+remove_vm_parser.set_defaults(func=remove_vm)
 make_snapshot_parser.set_defaults(func=make_snapshot)
 
 

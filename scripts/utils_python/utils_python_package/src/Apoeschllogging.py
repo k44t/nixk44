@@ -14,7 +14,7 @@ from threading import Thread
 import queue
 import time
 import os, sys
-from datetime import datetime
+from datetime import datetime, timedelta
 import inspect
 import re
 import traceback
@@ -22,6 +22,7 @@ from inspect import currentframe, getframeinfo
 from src.LogLevel import LogLevels
 from utils_python_package.src.CLIColors import clicolors
 from utils_python.utils_python_package.src.LogLevel import LogLevels
+import subprocess
 
 Deb_callbackfunction = None
 Deb_usePrintFunction = True
@@ -186,7 +187,7 @@ def Log(message, level = LogLevels.UNKNOWN, show_additional_info = False, wrappe
             debugMessage = debugMessage + str(level) + ": "
             
     if LogLevels.WARNING == level:
-        debugMessage = debugMessage + clicolors.WARNING + str(message)
+        debugMessage = debugMessage + clicolors.WARNING + str(message) + clicolors.ENDCOLOR
     elif LogLevels.ERROR == level:
         debugMessage = debugMessage + str(message)
     elif LogLevels.DEBUG == level:
@@ -233,6 +234,96 @@ def Fix_imports():
         sys_paths = sys.path
 
         
+# we are overriding python's internal exec, which would execute python code dynamically, because we don't need nor like it
+def myexec(command, silent=False, verbose=False):
+  Log_info(f"Executing command: {command}")
+  if verbose:
+    process = subprocess.Popen(command, 
+                            shell=True)
+  else:
+    process = subprocess.Popen(command, 
+                            shell=True,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE)
+  formatted_output = []
+  formatted_response = []
+  formatted_error = []
+  #set blocking to not blocking is necessary so that readline wont block when the process already finished. this only works on linux systems!
+  os.set_blocking(process.stdout.fileno(), False)
+  os.set_blocking(process.stderr.fileno(), False)
+  try:
+    timestamp_last_stdout_readline_start = datetime.now()
+    timestamp_last_stderr_readline_start = datetime.now()
+    timestamp_last_stdout_readline = timestamp_last_stdout_readline_start
+    timestamp_last_stderr_readline = timestamp_last_stderr_readline_start
+    while process.poll() is None:
+      if process.stdout != None:
+        response_line = process.stdout.readline().decode("utf-8").replace("\n", "")
+        if not silent and response_line != "":
+          Log_no_header("stdout: " + response_line)
+        if response_line != "":
+          timestamp_last_stdout_readline_start = datetime.now()
+          timestamp_last_stdout_readline = timestamp_last_stdout_readline_start
+          timestamp_last_stderr_readline = datetime.now()
+      if process.stderr != None:
+        error_line = process.stderr.readline().decode("utf-8").replace("\n", "")
+        if not silent and error_line != "":
+          Log_no_header("stderr: " + error_line)
+        if error_line != "":
+          timestamp_last_stderr_readline_start = datetime.now()
+          timestamp_last_stderr_readline = timestamp_last_stderr_readline_start
+          timestamp_last_stdout_readline = datetime.now()
+      if (process.stderr != None and error_line == "") and (process.stdout != None and response_line == ""):
+        timestamp_stdout_now = datetime.now()
+        timestamp_stderr_now = datetime.now()
+        if timestamp_stderr_now > (timestamp_last_stderr_readline + timedelta(seconds = 5)) and \
+          timestamp_stdout_now > (timestamp_last_stdout_readline + timedelta(seconds = 5)):
+          no_output_since = min(timestamp_stderr_now - timestamp_last_stderr_readline_start, timestamp_stdout_now - timestamp_last_stdout_readline_start)
+          Log_warn(f"Command `{command}` had no stderr and stdout output since {no_output_since}.")
+          timestamp_last_stdout_readline = timestamp_stdout_now
+          timestamp_last_stderr_readline = timestamp_stderr_now
+      elif (process.stderr != None and error_line == ""):
+        timestamp_stderr_now = datetime.now()
+        if timestamp_stderr_now > (timestamp_last_stderr_readline + timedelta(seconds = 5)):
+          Log_warn(f"Command `{command}` had no stderr output since {timestamp_stderr_now - timestamp_last_stderr_readline_start}.")
+          timestamp_last_stderr_readline = timestamp_stderr_now
+      elif (process.stdout != None and response_line == ""):
+        timestamp_stdout_now = datetime.now()
+        if timestamp_stdout_now > (timestamp_last_stdout_readline + timedelta(seconds = 5)):
+          Log_warn(f"Command `{command}` had no stdout output since {timestamp_stdout_now - timestamp_last_stdout_readline_start}.")
+          timestamp_last_stdout_readline = timestamp_stdout_now
+      if response_line != "":
+        formatted_response.append(response_line)
+        formatted_output.append(response_line)
+      if error_line != "":
+        formatted_error.append(error_line)
+        formatted_output.append(error_line)
+  except Exception as e:
+    pass
+  try:
+    response = process.stdout.readlines()
+    for line in response: 
+      line = line.decode("utf-8").replace("\n", "")
+      if line != "":
+        if not silent:
+          Log_no_header("stdout: " + line)
+        formatted_response.append(line)
+        formatted_output.append(line)
+  except Exception as e:
+    pass
+  try:
+    error = process.stderr.readlines()
+    for line in error: 
+      line = line.decode("utf-8").replace("\n", "")
+      if line != "":
+        if not silent:
+          Log_no_header("stderr: " + line)
+        formatted_error.append(line)
+        formatted_output.append(line)
+  except Exception as e:
+    pass
+  return process.returncode, formatted_output, formatted_response, formatted_error
+
 def Deb_set_additional_info(additional_info):
     Log("Deb_set_additional_info " + str(additional_info), level=LogLevels.DEBCONFIG)
     global Deb_additional_info
