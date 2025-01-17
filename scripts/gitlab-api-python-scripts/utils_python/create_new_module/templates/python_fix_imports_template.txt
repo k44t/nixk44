@@ -1,2 +1,0 @@
-from utils_python_package.src.Apoeschlutils import fix_imports
-fix_imports()

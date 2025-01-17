@@ -1,9 +1,0 @@
-#IMPORTS
-
-def main_function():
-    pass
-    
-if __name__ == "__main__":
-    log_verbose(#START_OF_MAIN_MESSAGE)
-    #ARG_PARSER
-    main_function()
