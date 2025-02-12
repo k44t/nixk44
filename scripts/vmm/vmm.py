@@ -268,18 +268,19 @@ def throw(message):
 
 def chmods_replace(path, elements, rights):
   for element in elements:
-    resulting_right = 0
-    for right in rights:
-      resulting_right = resulting_right | right
+    
     element_to_be_changed = f"{path}/{element}"
     try:
-      os.chmod(element_to_be_changed, right)
+      # using the command chmod since bit operations are not my thing
+      exec(f"chmod {rights} {element_to_be_changed}")
     except Exception as e:
       error_message = f"Could not change file mods, are you root? Error: '{e}'"
       log.error(error_message)
       raise BaseException(error_message)
-    log.info(f"modify rights of '{element_to_be_changed}' to '{resulting_right}'")
+    log.info(f"modify rights of '{element_to_be_changed}' to '{rights}'")
 
+# since the chmods_replace did not work properly
+'''
 def chmods_add(path, elements, rights):
   for element in elements:
     resulting_right = 0
@@ -294,6 +295,7 @@ def chmods_add(path, elements, rights):
       log.error(error_message)
       raise BaseException(error_message)
     log.info(f"modify rights of '{element_to_be_changed}' to '{resulting_right}'")
+'''
 
 def is_bind_mounted_as(pointed, pointing):
   pointers = exec_for_list(f"findmnt --noheadings --output source {pointing}")
@@ -504,7 +506,7 @@ def create(args):
           exit()
 
     mkdirs(f"{vmroot}", ["boot", "root", "etc", "nix", "data", "home"])
-    chmods_replace(f"{vmroot}", ["etc", "nix", "data", "home"], [755])
+    chmods_replace(f"{vmroot}", ["etc", "nix", "data", "home"], 755)
   
     log.info("checking boot partition")
   
@@ -559,8 +561,8 @@ def create(args):
 
   data_pool_location = f"{vmroot}/{data_tag}"
   mkdirs(f"{data_pool_location}", ["root", "home"])
-  chmods_replace(f"{data_pool_location}", [".", "home"], [755])
-  chmods_replace(f"{data_pool_location}", ["root"], [700])
+  chmods_replace(f"{data_pool_location}", [".", "home"], 755)
+  chmods_replace(f"{data_pool_location}", ["root"], 700)
   bind_mount(f"{data_pool_location}/root", f"{vmroot}/root")
   bind_mount(f"{data_pool_location}/home", f"{vmroot}/home")
   mount_additional_binds(args.additional_binds)
@@ -817,8 +819,8 @@ def setup_wireguard():
   feu_wireguard_path =  os.path.join(wireguard_path, "feu")
   knet_wireguard_path =  os.path.join(wireguard_path, "knet")
   mkdirs("", [keys_path, wireguard_path, feu_wireguard_path, knet_wireguard_path])
-  chmods_replace("", [keys_path], [555])
-  chmods_replace("", [wireguard_path, feu_wireguard_path, knet_wireguard_path], [550])
+  chmods_replace("", [keys_path], 555)
+  chmods_replace("", [wireguard_path, feu_wireguard_path, knet_wireguard_path], 550)
   privatekey_path =  os.path.join(wireguard_path, "privatekey")
   publickey_path =  os.path.join(wireguard_path, "publickey")
   if not os.path.isfile(privatekey_path):
@@ -834,8 +836,8 @@ def setup_wireguard():
     exec_or(f"wg genpsk > {k_psk_path}", "failed to generate preshared key for _k")
   returncode, k_presharedkey, formatted_response, formatted_error = exec_or(f"cat {k_psk_path}", "could not open preshared keyfile of _k")
   returncode, publickey, formatted_response, formatted_error = exec_or(f"cat {publickey_path}", "could not open public key")
-  chmods_replace("", [keys_path], [555])
-  chmods_replace("", [wireguard_path, feu_wireguard_path], [550])
+  chmods_replace("", [keys_path], 555)
+  chmods_replace("", [wireguard_path, feu_wireguard_path], 550)
   exec_or(f"chgrp -R systemd-network {wireguard_path}", "failed to change group to systemd-network")
   return_string = f"_g Preshared Key:\n{g_presharedkey[0]}\n_k Preshared Key:\n{k_presharedkey[0]}\nPublickey:\n{publickey[0]}"
   return return_string
