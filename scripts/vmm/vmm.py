@@ -279,7 +279,7 @@ def chmods_replace(path, elements, rights):
       raise BaseException(error_message)
     log.info(f"modify rights of '{element_to_be_changed}' to '{rights}'")
 
-# since the chmods_replace did not work properly
+# since the chmods_replace did not work properly' I'm assuming this has bugs too and I'm commenting it out
 '''
 def chmods_add(path, elements, rights):
   for element in elements:
