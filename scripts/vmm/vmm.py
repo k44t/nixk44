@@ -272,23 +272,6 @@ def chmods_replace(path, elements, rights):
       raise BaseException(error_message)
     log.info(f"modify rights of '{element_to_be_changed}' to '{rights}'")
 
-# since the chmods_replace did not work properly' I'm assuming this has bugs too and I'm commenting it out
-'''
-def chmods_add(path, elements, rights):
-  for element in elements:
-    resulting_right = 0
-    for right in rights:
-      resulting_right = resulting_right | right
-    element_to_be_changed = f"{path}/{element}"
-    try:
-      st = os.stat(element_to_be_changed)
-      os.chmod(element_to_be_changed, st.st_mode | right)
-    except Exception as e:
-      error_message = f"Could not change file mods, are you root? Error: '{e}'"
-      log.error(error_message)
-      raise BaseException(error_message)
-    log.info(f"modify rights of '{element_to_be_changed}' to '{resulting_right}'")
-'''
 
 def is_bind_mounted_as(pointed, pointing):
   pointers = exec_for_list(f"findmnt --noheadings --output source {pointing}")
@@ -896,5 +879,3 @@ except BaseException as exception:
 
   log.error(error_message)
 log.info("vmm finished!")
-# the sleep is necessary so the debug logger gets flushed properly at and of script
-time.sleep(1)
