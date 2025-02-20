@@ -24,13 +24,6 @@ logging.basicConfig(
 
 log = logging.getLogger("vmm")
 
-def Log_no_header(msg):
-  '''I have no idea what this function is supposed to do. So I'll simply replace it with a warning. TODO: Fixme'''
-  log.warning("Log_no_header: " + msg)
-
-# TODO: fixme:
-# from utils_python.utils_python_package.src.Apoeschllogging import *
-
 # Settings
 # debug = True
 # if debug:
@@ -149,7 +142,7 @@ def myexec(command):
       if process.stdout != None:
         response_line = process.stdout.readline().decode("utf-8").replace("\n", "")
         if not silent and response_line != "":
-          Log_no_header("stdout: " + response_line)
+          log.info("stdout: " + response_line)
         if response_line != "":
           timestamp_last_stdout_readline_start = datetime.now()
           timestamp_last_stdout_readline = timestamp_last_stdout_readline_start
@@ -157,7 +150,7 @@ def myexec(command):
       if process.stderr != None:
         error_line = process.stderr.readline().decode("utf-8").replace("\n", "")
         if not silent and error_line != "":
-          Log_no_header("stderr: " + error_line)
+          log.info("stderr: " + error_line)
         if error_line != "":
           timestamp_last_stderr_readline_start = datetime.now()
           timestamp_last_stderr_readline = timestamp_last_stderr_readline_start
@@ -195,7 +188,7 @@ def myexec(command):
       line = line.decode("utf-8").replace("\n", "")
       if line != "":
         if not silent:
-          Log_no_header("stdout: " + line)
+          log.info("stdout: " + line)
         formatted_response.append(line)
         formatted_output.append(line)
   except Exception as e:
@@ -206,7 +199,7 @@ def myexec(command):
       line = line.decode("utf-8").replace("\n", "")
       if line != "":
         if not silent:
-          Log_no_header("stderr: " + line)
+          log.info("stderr: " + line)
         formatted_error.append(line)
         formatted_output.append(line)
   except Exception as e:
