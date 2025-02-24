@@ -7,6 +7,7 @@ import json
 from natsort import natsorted
 from datetime import datetime, timedelta
 from getpass import getpass
+import traceback
 
 import argparse
 import logging
@@ -15,7 +16,7 @@ import sys
 
 # Configure the root logger
 logging.basicConfig(
-  level=logging.DEBUG,
+  level=logging.INFO,
   format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
   handlers=[
     # logging.FileHandler(logfile_path + datetime.now().strftime("%d-%m-%Y_%H:%M:%S.%f") ),  # File handler
@@ -27,7 +28,7 @@ log = logging.getLogger("vmm")
 
 log.original_error = log.error
 log.original_info = log.info
-log.original_debug = logger.debug
+log.original_debug = log.debug
 log.original_warning = log.warning
 log.original_critical = log.critical
 def customized_logger(level, message, *args, **kwargs):
@@ -38,7 +39,7 @@ def customized_logger(level, message, *args, **kwargs):
     entries = traceback.format_list(raw_tb)
     for line in entries:
         if ".vscode-server" in line or "/nix/store/" in line or "Apoeschllogging.py" in line\
-          or "zmirror_logging.py" in line:
+          or "customized" in line:
             continue
         else:
             regexp_pattern = r'line (.*?),'
@@ -90,74 +91,73 @@ log.critical = customized_critical
 # data_tag = "data"
 
 try:
-  mount_parent = os.environ(['VMM_MOUNT_ROOT'])
+  mount_parent = os.environ['VMM_MOUNT_ROOT']
 except Exception as e:
-  log.warning(f"{e} - we will continue with `/var/run/vmm`")
+  log.debug(f"{e} - we will continue with `/var/run/vmm`")
   mount_parent = "/var/run/vmm"
 try:
-  VMM_ZION_PATH = os.environ(['VMM_ZION_PATH'])
+  VMM_ZION_PATH = os.environ['VMM_ZION_PATH']
 except Exception as e:
-  log.warning(f"{e} - we will continue with `/#/zion/k44`")
+  log.debug(f"{e} - we will continue with `/#/zion/k44`")
   VMM_ZION_PATH = "/#/zion/k44"
 try:
-  VMM_ZVOL_PARENT_PATH = os.environ(['VMM_ZVOL_PARENT_PATH'])
+  VMM_ZVOL_PARENT_PATH = os.environ['VMM_ZVOL_PARENT_PATH']
 except Exception as e:
-  log.warning(f"{e} - we will continue with `None`")
+  log.debug(f"{e} - we will continue with `None`")
   VMM_ZVOL_PARENT_PATH = None
 
 # Create the parser
 parser = argparse.ArgumentParser(description="virtual machine worker")
-parser.add_argument("-v", "--verbose", default=False, action='store_true', help="print verbose output")
-parser.add_argument("-s", "--silent", default=False, action='store_true', help="dont print nixos-output output")
-
 subparser = parser.add_subparsers(required=True)
 
 shared_parser = argparse.ArgumentParser(add_help=False)
 shared_parser.add_argument("vmname", type=str, help="the name of the vm")
+shared_parser.add_argument("-v", "--verbose", default=False, action='store_true', help="print verbose output")
+shared_parser.add_argument("-s", "--silent", default=False, action='store_true', help="dont print nixos-output output")
+shared_parser.add_argument("--vmorg", type=str, default=None, help="the organisation under which the vm shall be installed")
+shared_parser.add_argument("--data_as_dataset", default=False, action='store_true', help="whether data is just a dataset and not a whole (possibly virtual) disk. (implies --no_data_disk)")
+shared_parser.add_argument("--no_snapshot", default=False, action='store_true', help="whether to NOT create a snapshot of a vm")
+shared_parser.add_argument("--additional_binds", type=str, default=None, help="additional binds that should be mounted. Paths given are relative to the host's root. Example: /new/mountpoint:/existing/path,/new/mountpoint2:/existing/path2")
 
-vmorg_parser = argparse.ArgumentParser(add_help=False)
-vmorg_parser.add_argument("--vmorg", required=True, type=str, help="the organisation under which the vm shall be installed")
+
 
 required_argument_parsers_for_creation_parser = argparse.ArgumentParser(add_help=False)
-required_argument_parsers_for_creation_parser.add_argument("--data_disk_only", help="wether to ONLY create a data disk.")
-required_argument_parsers_for_creation_parser.add_argument("--data_as_dataset", help="whether data is just a dataset and not a whole (possibly virtual) disk. (implies --no_data_disk)")
-required_argument_parsers_for_creation_parser.add_argument("--no_data_disk", help="wether to NOT create a data disk.")
+required_argument_parsers_for_creation_parser.add_argument("--data_disk_only", action='store_true', default=False, help="wether to ONLY create a data disk.")
+required_argument_parsers_for_creation_parser.add_argument("--no_data_disk", action='store_true', default=False, help="wether to NOT create a data disk.")
 
 required_argument_parsers_for_install_parser = argparse.ArgumentParser(add_help=False)
 required_argument_parsers_for_install_parser.add_argument("--do_not_unmount_afterwards", default=False, action='store_true', help="if this flag is set, vm will not be unmounted after install.")
 
 external_parser = argparse.ArgumentParser(add_help=False)
 external_parser.add_argument("--mountpoint", type=str, default=None, help="path to where the nixos installation is (or should be) mounted")
-external_parser.add_argument("--dm_crypt_suffix", type=str, default=None, help="a physical host (i.e. usb drive) may have multiple encrypted blockdevs that mirror its data. we support mounting only one for now.")
+external_parser.add_argument("--division", type=str, default=None, help="a physical host (i.e. usb drive) may have multiple encrypted blockdevs that mirror its data. we support mounting only one for now.")
 external_parser.add_argument("--encrypted", default=False, action='store_true', help="if this flag is set, the main and data partitions will be encrypted (or decrypted on mount)")
 external_parser.add_argument("--key_file", type=str, default=None, help="path to keyfile for decrypting and encrypting the dm_crypt")
+
+external_parser.add_argument("--main_blockdev", type=str, default=None, help="the main blockdev for an external host (i.e. usb drive)")
+external_parser.add_argument("--data_blockdev", type=str, default=None, help="the data blockdev for an external host (i.e. usb drive)")
+
 
 size_parser = argparse.ArgumentParser(add_help=False)
 size_parser.add_argument("--data_disk_size", help="including a unit (10GiB, 1500M, ...)")
 size_parser.add_argument("--main_disk_size", help="including a unit (10GiB), 1500M, ...)")
 
-mountpoint_parser = argparse.ArgumentParser(add_help=False)
-mountpoint_parser.add_argument("--additional_binds", type=str, default=None, help="additional binds that should be mounted. Paths given are relative to the host's root. Example: /new/mountpoint:/existing/path,/new/mountpoint2:/existing/path2")
 
-divison_parser = argparse.ArgumentParser(parents=[mountpoint_parser], add_help=False)
 
 zvol_parser = argparse.ArgumentParser(add_help=False)
 zvol_parser.add_argument("--zvol_parent_path", default=VMM_ZVOL_PARENT_PATH, help="the zfs parent path under which to create the block devices")
 
 # Add subparsers
-create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser, mountpoint_parser, external_parser, required_argument_parsers_for_creation_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
-
-create_parser.add_argument("--main_blockdev", type=str, default=None, help="the main blockdev for an external host (i.e. usb drive)")
-create_parser.add_argument("--data_blockdev", type=str, default=None, help="the data blockdev for an external host (i.e. usb drive)")
+create_parser = subparser.add_parser('create', parents=[shared_parser, zvol_parser, size_parser, external_parser, required_argument_parsers_for_creation_parser], help='checks if the virtual machine already exists, otherwise creates the virtual machine')
 
 
 mount_parser = subparser.add_parser('mount', parents=[shared_parser, external_parser], help='mount an already existing virtual machine.')
 unmount_parser = subparser.add_parser('unmount', parents=[shared_parser], help='unmount an already existing virtual machine.')
 resize_parser = subparser.add_parser('resize', parents=[shared_parser, zvol_parser, size_parser], help='resize an already existing virtual machine.')
-install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_parser, external_parser, divison_parser, vmorg_parser, required_argument_parsers_for_install_parser], help='install an already existing virtual machine.')
+install_parser = subparser.add_parser('install', parents=[shared_parser, zvol_parser, external_parser, required_argument_parsers_for_install_parser], help='install an already existing virtual machine.')
 enter_parser = subparser.add_parser('enter', parents=[external_parser], help='enter an already existing virtual machine.')
 kill_parser = subparser.add_parser('kill', parents=[shared_parser], help='kill a running virtual machine (virsh destroy vmname).')
-setup_vm_parser = subparser.add_parser('setup_vm', parents=[shared_parser, zvol_parser, size_parser,  external_parser, divison_parser, vmorg_parser, required_argument_parsers_for_creation_parser, required_argument_parsers_for_install_parser], help='sets up a vm (create and install)')
+setup_vm_parser = subparser.add_parser('setup_vm', parents=[shared_parser, zvol_parser, size_parser,  external_parser, required_argument_parsers_for_creation_parser, required_argument_parsers_for_install_parser], help='sets up a vm (create and install)')
 remove_vm_parser = subparser.add_parser('remove_vm', parents=[shared_parser], help='completely removes the vm from the system')
 make_snapshot_parser = subparser.add_parser('snapshot', parents=[shared_parser, zvol_parser], help='snapshots a vm')
 #Add arguments to subparsers
@@ -173,7 +173,7 @@ def is_partitioned(blockdev):
   returncode, formatted_output, formatted_response, formatted_error = exec_for_bool(f"parted -s {blockdev} print")
   return returncode
 
-# returns true if the command succe
+# returns true if the command succeeds
 def exec_for_bool(command, input=None):
   retVal = False
   returncode, formatted_output, formatted_response, formatted_error = exec(command, input)
@@ -421,10 +421,10 @@ def is_mounted(blockdev):
 
 
 def get_or_create_blockdev(vol_name, disk_size, args):
-  if args.blockdev_path is not None:
-    return args.blockdev_path
+  if getattr(args, f"{vol_name}_blockdev") is not None:
+    return getattr(args, f"{vol_name}_blockdev")
   else:
-    log.info(f"no --blockdev_path given as argument. Trying to create zvol...")
+    log.info(f"no --{vol_name}_blockdev given as argument. Trying to create zvol...")
     zvol_path = f"{get_zvol_parent_path(args)}/vm-{vmname}-{vol_name}"
     blockdev_path = get_or_create_zvol(vol_name, disk_size, zvol_path)
     return blockdev_path
@@ -497,10 +497,10 @@ def zpool_ensure_import_if_importable(vmname):
   else:
     return True
 
-def classic_mount_if_not_mounted(partition, path, blockdev_path):
+def classic_mount_if_not_mounted(partition, path):
   if not is_mounted_as(partition, f"{path}"):
     log.info("mounting partition")
-    exec_or(f"mount {partition} {path}", f"failed to mount partition: `{blockdev_path}`")
+    exec_or(f"mount {partition} {path}", f"failed to mount partition: `{partition}`")
     log.info(f"mounted `{partition} {path}`")
 
 
@@ -529,20 +529,19 @@ def handle_dmcrypt(volname, partition, allow_create=False):
       else:
         pw = ask_user_for_password()
         pws = [pw, pw, ""]
-      else:
-        log.info("trying to decrypt blockdev with luks")
-        returncode, formatted_output, formatted_response, formatted_error = exec(f"cryptsetup open {partition} {crypt_name} {key_file_arg}", input = pws)
-        is_not_a_dm_crypt_device = False
-        for line in formatted_output:
-          if "doesn't appear to be a valid" in line:
-            is_not_a_dm_crypt_device = True
-        if is_not_a_dm_crypt_device:
-          if allow_create:
-            log.info("it does not appear to be luks encrypted yet. formatting blockdev with luks..."):
-            exec_or(f"cryptsetup luksFormat --allow-discards {partition} {key_file_arg}", f"could not format luks encrypted partition", input = pws)
-            exec_or(f"cryptsetup open {partition} {crypt_name} {key_file_arg}", f"could not decrypt the partition I just formatted. this is weird", input = pws)
-          else:
-            raise ValueError(f"not an encrypted partition: {partition}")
+      log.info("trying to decrypt blockdev with luks")
+      returncode, formatted_output, formatted_response, formatted_error = exec(f"cryptsetup open {partition} {crypt_name} {key_file_arg}", input = pws)
+      is_not_a_dm_crypt_device = False
+      for line in formatted_output:
+        if "doesn't appear to be a valid" in line:
+          is_not_a_dm_crypt_device = True
+      if is_not_a_dm_crypt_device:
+        if allow_create:
+          log.info("it does not appear to be luks encrypted yet. formatting blockdev with luks...")
+          exec_or(f"cryptsetup luksFormat --allow-discards {partition} {key_file_arg}", f"could not format luks encrypted partition", input = pws)
+          exec_or(f"cryptsetup open {partition} {crypt_name} {key_file_arg}", f"could not decrypt the partition I just formatted. this is weird", input = pws)
+        else:
+          raise ValueError(f"not an encrypted partition: {partition}")
     return f"/dev/mapper/{crypt_name}"
   else:
     return partition
@@ -591,7 +590,7 @@ def create(args):
 
     if is_zfs_manual_mount(f"{vmname}/fsroot"):
       log.info(f"mount zfs '{vmname}/fsroot' manually...")
-      returncode, formatted_output, formatted_response, formatted_error = exec(f"mount -t zfs {vmname}/fsroot /var/vmm/{vmname}")
+      returncode, formatted_output, formatted_response, formatted_error = exec(f"mount -t zfs {vmname}/fsroot {vmroot}")
       if 0 != returncode:
         if not yes(f"could not mount zfs dataset: `{vmname}/fsroot`. Error: `{formatted_error[0]}` Do you want to continue?"):
           exit()
@@ -601,14 +600,14 @@ def create(args):
 
     log.info("checking boot partition")
 
-    boot_partition = f"{partition_prefix}-boot{division_arg}"
+    boot_partition = f"{partition_prefix}{division_arg}-boot"
     if not is_formatted(boot_partition):
       log.info(f"formatting '{boot_partition}'")
-      exec_or(f"mkfs.fat -F 32 -n \"{vmname[0:6]}-boot\" {boot_partition}", f"could not format: {boot_partition}")
+      exec_or(f"mkfs.fat -F 32 -n \"{(vmname+division_arg)[0:6]}-boot\" {boot_partition}", f"could not format: {boot_partition}")
     else:
       log.warning(f"partition `{boot_partition}` is already formatted. You can set the flag `--reformat-boot-partition` to reformat it.")
 
-    classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot", blockdev_path)
+    classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot")
 
 
   create_data_disk = not args.no_data_disk
@@ -646,7 +645,7 @@ def create(args):
       exec_or(f"zpool create {data_pool} -R /var/vmm/{data_pool} {decrypted_blockdev} -o autotrim=on -O acltype=posix -O atime=off -O dnodesize=auto -O utf8only=on -O xattr=sa -O mountpoint=/data -O com.sun:auto-snapshot=true", f"could not create zpool: {data_pool}")
       log.info(f"zpool `{data_pool}` created.")
 
-  data_pool_location = f"{vmroot}/dat"
+  data_pool_location = f"{vmroot}/data"
   mkdirs(f"{data_pool_location}", ["root", "home"])
   chmods_replace(f"{data_pool_location}", [".", "home"], 755)
   chmods_replace(f"{data_pool_location}", ["root"], 700)
@@ -710,11 +709,6 @@ def mount(args):
 
   partition_prefix = f"/dev/disk/by-partlabel/{vmname}{division_arg}"
 
-  #alexTODO: division needs to be implemented (see http://etzchaim.k44/FeuK44/nixk44/-/issues/2)
-  division = ""
-  if args.division != None:
-    division = f"-{args.division}"
-
   if zpool_ensure_import_if_importable(vmname):
     log.info(f"zpool `{vmname}` is imported.")
   else:
@@ -723,30 +717,35 @@ def mount(args):
     raise BaseException(error_message)
   mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/fsroot", f"{vmroot}")
 
-  data_pool = f"{vmname}-data"
 
-  data_pool_location = f"{vmroot}/{data_tag}"
-  log.info(f"checking if data dataset of `{data_pool}` already exists...")
-  if does_zfs_dataset_exist(data_pool):
-    mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/data", f"{data_pool_location}")
+  data_dir = f"{vmroot}/data"
+  if args.data_as_dataset:
+    mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/data", f"{vmroot}/data")
+
   else:
-    log.info(f"data dataset of `{data_pool}` does not exists.")
-    log.info(f"checking if data zpool `{data_pool}` is imported...")
-    if zpool_ensure_import_if_importable(data_pool):
-      log.info(f"zpool `{data_pool}` is imported.")
+    data_pool = f"{vmname}-data"
+
+    log.info(f"checking if data dataset of `{data_pool}` already exists...")
+    if does_zfs_dataset_exist(data_pool):
+      mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/data", f"{data_dir}")
     else:
-      error_message = f"data zpool `{data_pool}` is not importable."
-      log.error(error_message)
-      raise BaseException(error_message)
+      log.info(f"data dataset of `{data_pool}` does not exists.")
+      log.info(f"checking if data zpool `{data_pool}` is imported...")
+      if zpool_ensure_import_if_importable(data_pool):
+        log.info(f"zpool `{data_pool}` is imported.")
+      else:
+        error_message = f"data zpool `{data_pool}` is not importable."
+        log.error(error_message)
+        raise BaseException(error_message)
 
   mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/etc", f"{vmroot}/etc")
   mount_legacy_if_zfs_is_legacy_mount(f"{vmname}/nix", f"{vmroot}/nix")
 
   boot_partition = f"{partition_prefix}-boot"
-  mkdirs(f"{data_pool_location}", ["root", "home"])
-  classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot", f"{boot_partition}")
-  bind_mount(f"{data_pool_location}/root", f"{vmroot}/root")
-  bind_mount(f"{data_pool_location}/home", f"{vmroot}/home")
+  mkdirs(f"{data_dir}", ["root", "home"])
+  classic_mount_if_not_mounted(boot_partition, f"{vmroot}/boot")
+  bind_mount(f"{data_dir}/root", f"{vmroot}/root")
+  bind_mount(f"{data_dir}/home", f"{vmroot}/home")
   mount_additional_binds(args.additional_binds)
 
 def unmount(args):
@@ -801,12 +800,17 @@ def get_zvol_parent_path(args):
 
 def install(args):
   guard_vm_running(vmname)
-  log.info("start mounting...")
-  mount(args)
-  log.info("mounting finished. installing...")
-  create_snapshot(vmname, "auto_snapshot_before_install")
+  # log.info("start mounting...")
+  # mount(args)
+  # log.info("mounting finished. installing...")
+  exec_or(f"mountpoint {vmroot}", f"vmroot ({vmroot}) is not a mountpoint.")
+  
+  if not args.no_snapshot:
+    create_snapshot(vmname, "auto_snapshot_before_install")
   vmorg = args.vmorg
-  returncode, install_output, install_result, install_error = exec_or(f"cd {VMM_ZION_PATH}; echo $PATH; nixos-install --flake ./{vmorg}/hosts/{vmname}#{vmname} --root {vmroot} --impure --no-root-passwd", "nixos-install failed. Maybe you need to `set NIXPATH=...`?")
+  if vmorg is None:
+    raise ValueError("argument --vmorg required")
+  returncode, install_output, install_result, install_error = exec_or(f"cd {VMM_ZION_PATH}; echo PATH: $PATH; echo NIX_PATH: $NIX_PATH; nixos-install --flake ./{vmorg}/hosts/{vmname}#{vmname} --root {vmroot} --impure --no-root-passwd", "nixos-install failed. Maybe you need to `set NIX_PATH=...`? Or maybe check if you are sure, that the nix configuration file does exist and is properly implemented?")
   if not isinstance(install_result, list):
     install_result = [install_result]
   install_result_string = ""
@@ -825,17 +829,20 @@ def install(args):
       raise BaseException(error_message)
   if not args.do_not_unmount_afterwards:
     unmount(args)
-  create_snapshot(vmname, "auto_snapshot_after_install")
+
+  if not args.no_snapshot:
+    create_snapshot(vmname, "auto_snapshot_after_install")
 
 def make_snapshot(args):
-  create_snapshot(args.vmname, args.snapshot_name)
+  create_snapshot(args.snapshot_name)
 
-def create_snapshot(vmname, snapshot_name = ""):
+def create_snapshot(snapshot_name = ""):
   # TODO: I can't find this function. We must create some library we can include.
   ##  now = Get_timestamp_for_filenames()
   # hence I replaced it with:
   now = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
   if snapshot_name != "":
+    # add underscore as separator before snapshot_name if snapshot_name shall be used
     snapshot_name = "_" + snapshot_name
   vm_data = f"vm-{vmname}-data"
   vm_vda = f"vm-{vmname}-vda"
@@ -953,7 +960,6 @@ mount_parser.set_defaults(func=mount)
 unmount_parser.set_defaults(func=unmount)
 resize_parser.set_defaults(func=resize)
 install_parser.set_defaults(func=install)
-enter_parser.set_defaults(func=enter)
 kill_parser.set_defaults(func=kill)
 setup_vm_parser.set_defaults(func=setup_vm)
 remove_vm_parser.set_defaults(func=remove_vm)
@@ -977,15 +983,10 @@ returncode, formatted_output, formatted_response, formatted_error = exec("whoami
 try:
   if formatted_output[0] != "root":
     error_message = "You must be root!"
-    log.error(error_message)
     raise BaseException(error_message)
   args.func(args)
 except BaseException as exception:
-  # TODO: this also seems to be from apoeschl logging, and I have no idea what it does
-  # so I commented out the following line:
-  ## error_message = str(traceback.format_exc()) + "\n" + str(exception)
-  # and replaced it with
-  error_message = exception
+  error_message = str(traceback.format_exc()) + "\n" + str(exception)
 
   log.error(error_message)
 log.info("vmm finished!")
